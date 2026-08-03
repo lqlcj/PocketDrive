@@ -1,0 +1,74 @@
+export function formatBytes(n: number): string {
+    if (!Number.isFinite(n) || n < 0) return '-';
+    if (n < 1024) return `${n} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let v = n;
+    let i = -1;
+    do {
+        v /= 1024;
+        i++;
+    } while (v >= 1024 && i < units.length - 1);
+    return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+export function formatSpeed(n: number): string {
+    return n > 0 ? `${formatBytes(n)}/s` : '';
+}
+
+export function formatTime(ms: number | string): string {
+    const d = new Date(ms);
+    const pad = (x: number) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export type FileKind =
+    | 'folder'
+    | 'image'
+    | 'video'
+    | 'audio'
+    | 'markdown'
+    | 'text'
+    | 'archive'
+    | 'other';
+
+const EXT_KIND: Record<string, FileKind> = {
+    png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+    svg: 'image', bmp: 'image', avif: 'image', ico: 'image',
+    mp4: 'video', webm: 'video', mkv: 'video', mov: 'video', avi: 'video',
+    m4v: 'video', ts: 'video', flv: 'video',
+    mp3: 'audio', m4a: 'audio', flac: 'audio', wav: 'audio', ogg: 'audio',
+    aac: 'audio', opus: 'audio', wma: 'audio',
+    md: 'markdown', markdown: 'markdown',
+    txt: 'text', log: 'text', json: 'text', yaml: 'text', yml: 'text',
+    toml: 'text', ini: 'text', conf: 'text', sh: 'text', ps1: 'text',
+    go: 'text', js: 'text', jsx: 'text', tsx: 'text', py: 'text', css: 'text',
+    html: 'text', xml: 'text', csv: 'text', sql: 'text', c: 'text', h: 'text',
+    cpp: 'text', rs: 'text', java: 'text',
+    zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive',
+    tar: 'archive', xz: 'archive', bz2: 'archive', iso: 'archive',
+};
+
+export function fileKind(name: string, dir = false): FileKind {
+    if (dir) return 'folder';
+    const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+    // .ts 既是 TypeScript 又是视频流分片,按代码文本处理更常见
+    if (ext === 'ts') return 'text';
+    return EXT_KIND[ext] ?? 'other';
+}
+
+export const KIND_ICON: Record<FileKind, string> = {
+    folder: '📁',
+    image: '🖼️',
+    video: '🎬',
+    audio: '🎵',
+    markdown: '📝',
+    text: '📄',
+    archive: '📦',
+    other: '🍃',
+};
+
+// 浏览器可直接播放的容器格式;其余视频只提供下载
+export function browserPlayable(name: string): boolean {
+    const ext = name.split('.').pop()?.toLowerCase() ?? '';
+    return ['mp4', 'webm', 'm4v', 'mov', 'ogg'].includes(ext);
+}

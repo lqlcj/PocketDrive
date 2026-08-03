@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+/* 岛屿手账主题:白天(奶油沙滩) / 黑夜(星空海面) */
+:root {
+    --background: #f2ecd8;
+    --paper: #fffbef;
+    --paper-2: #f3ecd9;
+    --ink: #5b4a36;
+    --ink-soft: #8a7a63;
+    --line: #e6dcc3;
+    --leaf: #6db33f;
+    --leaf-dark: #4a7c3f;
+    --leaf-soft: #e6f4d9;
+    --danger: #c0392b;
+    --danger-soft: #fdeceb;
+}
+
+.dark {
+    --background: #1c2431;
+    --paper: #253044;
+    --paper-2: #2d3950;
+    --ink: #e9e2cd;
+    --ink-soft: #9aa4b5;
+    --line: #3a465c;
+    --leaf: #7fc457;
+    --leaf-dark: #a5d98a;
+    --leaf-soft: #2f4230;
+    --danger: #e57368;
+    --danger-soft: #4a2f2d;
+}
+
+@theme inline {
+    --color-background: var(--background);
+    --color-paper: var(--paper);
+    --color-paper-2: var(--paper-2);
+    --color-ink: var(--ink);
+    --color-ink-soft: var(--ink-soft);
+    --color-line: var(--line);
+    --color-leaf: var(--leaf);
+    --color-leaf-dark: var(--leaf-dark);
+    --color-leaf-soft: var(--leaf-soft);
+    --color-danger: var(--danger);
+    --color-danger-soft: var(--danger-soft);
+    --font-sans: 'Nunito', 'Noto Sans SC', system-ui, sans-serif;
+    --radius-card: 18px;
+}
+
+html {
+    color-scheme: light;
+}
+
+html.dark {
+    color-scheme: dark;
+}
+
+body {
+    @apply bg-background text-ink font-sans min-h-screen;
+    transition: background-color 0.25s ease;
+}
+
+/* markdown 预览排版 */
+.prose-island {
+    line-height: 1.75;
+    word-break: break-word;
+}
+.prose-island h1,
+.prose-island h2,
+.prose-island h3 {
+    font-weight: 800;
+    margin: 1em 0 0.4em;
+}
+.prose-island h1 {
+    font-size: 1.5em;
+    border-bottom: 2px dashed var(--line);
+    padding-bottom: 0.3em;
+}
+.prose-island h2 {
+    font-size: 1.25em;
+}
+.prose-island p {
+    margin: 0.5em 0;
+}
+.prose-island ul,
+.prose-island ol {
+    padding-left: 1.4em;
+    margin: 0.5em 0;
+}
+.prose-island ul {
+    list-style: disc;
+}
+.prose-island ol {
+    list-style: decimal;
+}
+.prose-island code {
+    background: var(--paper-2);
+    border-radius: 6px;
+    padding: 0.1em 0.35em;
+    font-size: 0.9em;
+}
+.prose-island pre {
+    background: var(--paper-2);
+    border-radius: 12px;
+    padding: 12px;
+    overflow: auto;
+    margin: 0.6em 0;
+}
+.prose-island pre code {
+    background: none;
+    padding: 0;
+}
+.prose-island blockquote {
+    border-left: 4px solid var(--leaf);
+    padding-left: 1em;
+    color: var(--ink-soft);
+    margin: 0.6em 0;
+}
+.prose-island a {
+    color: var(--leaf-dark);
+    text-decoration: underline;
+}
+.prose-island table {
+    border-collapse: collapse;
+    margin: 0.6em 0;
+}
+.prose-island th,
+.prose-island td {
+    border: 1px dashed var(--line);
+    padding: 4px 10px;
+}
+.prose-island img {
+    max-width: 100%;
+    border-radius: 10px;
+}

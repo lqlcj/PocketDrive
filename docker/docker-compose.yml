@@ -1,0 +1,41 @@
+# PocketDrive 部署:pocketdrive + aria2 两个容器,共享同一个 /data(整个网盘目录)
+# 使用前:把 ARIA2_SECRET 和 POCKETDRIVE_ADMIN_PASSWORD 改成自己的值
+# (或在同目录建 .env 文件写入这两个变量)
+services:
+    pocketdrive:
+        build:
+            context: ..
+            dockerfile: docker/Dockerfile
+        container_name: pocketdrive
+        restart: unless-stopped
+        ports:
+            - '8080:8080'
+        environment:
+            - POCKETDRIVE_DATA_DIR=/data
+            - POCKETDRIVE_DB=/config/pocketdrive.db
+            - POCKETDRIVE_ADMIN_USER=${POCKETDRIVE_ADMIN_USER:-admin}
+            # 留空则首次启动随机生成并打印在容器日志里
+            - POCKETDRIVE_ADMIN_PASSWORD=${POCKETDRIVE_ADMIN_PASSWORD:-}
+            - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
+            - POCKETDRIVE_ARIA2_SECRET=${ARIA2_SECRET:-changeme}
+            - POCKETDRIVE_ARIA2_DATA_DIR=/data
+        volumes:
+            - ./data:/data
+            - ./config:/config
+        depends_on:
+            - aria2
+
+    aria2:
+        image: p3terx/aria2-pro
+        container_name: pocketdrive-aria2
+        restart: unless-stopped
+        environment:
+            - RPC_SECRET=${ARIA2_SECRET:-changeme}
+            - LISTEN_PORT=6888
+            # 2G VPS 资源限制
+            - MAX_CONCURRENT_DOWNLOADS=3
+        volumes:
+            - ./data:/data
+        ports:
+            - '6888:6888'
+            - '6888:6888/udp'

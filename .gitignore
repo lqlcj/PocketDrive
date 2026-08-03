@@ -1,0 +1,24 @@
+# binaries
+pocketdrive.exe
+pocketdrive
+/out/
+
+# runtime data
+/data/
+*.db
+*.db-*
+
+# frontend
+web/node_modules/
+web/dist/
+web/shots/
+
+# misc
+.DS_Store
+server.log
+cookies.txt
+
+# local
+.claude/
+thumbs/
+ck.txt
