@@ -20,17 +20,21 @@ const maxTextPreview = 2 << 20 // 2 MiB
 type Service struct {
 	root    *os.Root
 	DataDir string
+	tmpDir  string // 分片上传暂存目录(DB 同级,不在网盘里)
 }
 
-func New(dataDir string) (*Service, error) {
+func New(dataDir, tmpDir string) (*Service, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return nil, err
 	}
 	r, err := os.OpenRoot(dataDir)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{root: r, DataDir: dataDir}, nil
+	return &Service{root: r, DataDir: dataDir, tmpDir: tmpDir}, nil
 }
 
 func (s *Service) Root() *os.Root { return s.root }
@@ -106,7 +110,11 @@ func (s *Service) List(p string) ([]Entry, error) {
 		if entries[i].Dir != entries[j].Dir {
 			return entries[i].Dir
 		}
-		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		if entries[i].Dir {
+			return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		}
+		// 文件按修改时间倒序:新传的排最前
+		return entries[i].ModTime > entries[j].ModTime
 	})
 	return entries, nil
 }

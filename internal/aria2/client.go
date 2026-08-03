@@ -77,10 +77,14 @@ type Status struct {
 	} `json:"bittorrent"`
 }
 
-func (c *Client) AddURI(uri, dir string) (string, error) {
+func (c *Client) AddURI(uri string, opts map[string]string) (string, error) {
 	var gid string
-	err := c.call("aria2.addUri", []any{[]string{uri}, map[string]string{"dir": dir}}, &gid)
+	err := c.call("aria2.addUri", []any{[]string{uri}, opts}, &gid)
 	return gid, err
+}
+
+func (c *Client) ChangeGlobalOption(opts map[string]string) error {
+	return c.call("aria2.changeGlobalOption", []any{opts}, nil)
 }
 
 func (c *Client) TellStatus(gid string) (*Status, error) {

@@ -16,7 +16,6 @@ import (
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
 )
-
 // Manager keeps aria2 task state mirrored in SQLite so history survives
 // aria2 restarts, and handles the magnet metadata → real-download gid
 // migration (followedBy).
@@ -25,6 +24,8 @@ type Manager struct {
 	c        *Client
 	dataRoot string // data dir as seen by the aria2 process
 	degraded atomic.Bool
+	// 全局设置是否已成功推给 aria2(重连后需要重推)
+	globalsApplied atomic.Bool
 
 	mu     sync.Mutex
 	speeds map[string]int64
@@ -47,6 +48,9 @@ func (m *Manager) Start() {
 		// 启动即探测一次,让前端在无任务时也能显示 aria2 连接状态
 		_, err := m.c.GetVersion()
 		m.degraded.Store(err != nil)
+		if err == nil {
+			m.applyGlobals()
+		}
 
 		t := time.NewTicker(2 * time.Second)
 		defer t.Stop()
@@ -56,9 +60,14 @@ func (m *Manager) Start() {
 				return
 			case <-t.C:
 				m.sync()
+				// aria2 恢复可达后重推全局设置
+				if !m.degraded.Load() && !m.globalsApplied.Load() {
+					m.applyGlobals()
+				}
 			}
 		}
 	}()
+	m.startTrackerLoop()
 }
 
 func isTerminal(status string) bool {
@@ -171,7 +180,18 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	if relDir != "" {
 		dir = path.Join(strings.ReplaceAll(m.dataRoot, "\\", "/"), relDir)
 	}
-	gid, err := m.c.AddURI(rawURL, dir)
+	s := m.Settings()
+	opts := map[string]string{
+		"dir":       dir,
+		"seed-time": strconv.Itoa(s.SeedTimeMin),
+	}
+	// 磁力任务注入最新 tracker 列表,提升冷门种子连接率
+	if strings.HasPrefix(rawURL, "magnet:") && s.TrackerAuto {
+		if t := m.trackers(); t != "" {
+			opts["bt-tracker"] = t
+		}
+	}
+	gid, err := m.c.AddURI(rawURL, opts)
 	if err != nil {
 		m.degraded.Store(true)
 		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())

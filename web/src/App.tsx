@@ -6,13 +6,11 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import Files from './pages/Files';
-import Notes from './pages/Notes';
 import NoteEditor from './pages/NoteEditor';
-import Gallery from './pages/Gallery';
-import Music from './pages/Music';
-import Cinema from './pages/Cinema';
 import Downloads from './pages/Downloads';
+import DownloadSettings from './pages/DownloadSettings';
 import VideoDL from './pages/VideoDL';
+import SharesPage from './pages/SharesPage';
 import Trash from './pages/Trash';
 import Settings from './pages/Settings';
 import SharePage from './pages/SharePage';
@@ -41,13 +39,11 @@ function Private({
             <Route element={<Layout profile={profile} onLogout={onLogout} />}>
                 <Route path="/" element={<Home />} />
                 <Route path="/files/*" element={<Files />} />
-                <Route path="/notes" element={<Notes />} />
                 <Route path="/note/*" element={<NoteEditor />} />
-                <Route path="/gallery" element={<Gallery />} />
-                <Route path="/music" element={<Music />} />
-                <Route path="/cinema" element={<Cinema />} />
                 <Route path="/downloads" element={<Downloads />} />
+                <Route path="/downloads/settings" element={<DownloadSettings />} />
                 <Route path="/video" element={<VideoDL />} />
+                <Route path="/shares" element={<SharesPage />} />
                 <Route path="/trash" element={<Trash />} />
                 <Route
                     path="/settings"

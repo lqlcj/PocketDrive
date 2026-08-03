@@ -60,6 +60,10 @@ export default function VideoDL() {
 
     useEffect(() => {
         load();
+        // 默认保存目录跟随「下载设置」
+        api.downloadSettings()
+            .then((r) => setDir((d) => (d === '' ? r.settings.defaultDir : d)))
+            .catch(() => undefined);
         const t = setInterval(load, 2000);
         return () => clearInterval(t);
     }, [load]);

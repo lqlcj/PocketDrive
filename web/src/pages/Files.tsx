@@ -6,15 +6,25 @@ import type { FileEntry, Share } from '../api';
 import { fileKind, formatBytes, formatTime, KIND_ICON } from '../util';
 import Preview from '../components/Preview';
 import FolderPicker from '../components/FolderPicker';
+import FileTree from '../components/FileTree';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input, NativeSelect } from '../components/ui/input';
 import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
+import { Progress } from '../components/ui/progress';
 import { cn } from '../lib/utils';
 
 type ViewMode = 'list' | 'grid';
 
 const DND_TYPE = 'application/x-pd-path';
+const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB
+const BIG_FILE = 64 * 1024 * 1024; // 超过 64MB 走分片上传
+
+const FOLDER_EMOJIS = [
+    '📁', '🎵', '🎬', '🖼️', '📔', '💼', '🎮', '📚',
+    '🍱', '🧸', '🌟', '💾', '🔧', '🏠', '❤️', '🎁',
+    '✈️', '📷', '🎨', '🏫', '👶', '🐾', '🔒', '🗃️',
+];
 
 function Breadcrumb({ path }: { path: string }) {
     const parts = path === '' ? [] : path.split('/');
@@ -39,7 +49,17 @@ function Breadcrumb({ path }: { path: string }) {
     );
 }
 
-function Thumb({ path, name, dir }: { path: string; name: string; dir: boolean }) {
+function Thumb({
+    path,
+    name,
+    dir,
+    dirIcon,
+}: {
+    path: string;
+    name: string;
+    dir: boolean;
+    dirIcon?: string;
+}) {
     const kind = fileKind(name, dir);
     const [failed, setFailed] = useState(false);
     if (!dir && (kind === 'image' || kind === 'video') && !failed) {
@@ -55,7 +75,7 @@ function Thumb({ path, name, dir }: { path: string; name: string; dir: boolean }
     }
     return (
         <div className="w-full h-28 flex items-center justify-center text-4xl bg-paper-2">
-            {KIND_ICON[kind]}
+            {dir ? (dirIcon ?? '📁') : KIND_ICON[kind]}
         </div>
     );
 }
@@ -68,10 +88,13 @@ export default function Files() {
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
+    const [bigUpload, setBigUpload] = useState<{ name: string; pct: number } | null>(null);
     const fileInput = useRef<HTMLInputElement>(null);
     const [view, setView] = useState<ViewMode>(
         () => (localStorage.getItem('pd_view') as ViewMode) || 'list',
     );
+    const [treeVersion, setTreeVersion] = useState(0);
+    const [icons, setIcons] = useState<Record<string, string>>({});
 
     const [mkdirOpen, setMkdirOpen] = useState(false);
     const [mkdirName, setMkdirName] = useState('');
@@ -81,6 +104,7 @@ export default function Files() {
     const [renameName, setRenameName] = useState('');
     const [moveTarget, setMoveTarget] = useState<FileEntry | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
+    const [iconTarget, setIconTarget] = useState<FileEntry | null>(null);
     const [previewIdx, setPreviewIdx] = useState<number | null>(null);
 
     const [shareTarget, setShareTarget] = useState<FileEntry | null>(null);
@@ -92,6 +116,12 @@ export default function Files() {
     const [dragOver, setDragOver] = useState(false);
     const [dropTarget, setDropTarget] = useState<string | null>(null);
 
+    const loadIcons = useCallback(() => {
+        api.icons()
+            .then((r) => setIcons(r.icons))
+            .catch(() => undefined);
+    }, []);
+
     const load = useCallback(() => {
         setLoading(true);
         api.listFiles(path)
@@ -101,9 +131,11 @@ export default function Files() {
                 setEntries([]);
             })
             .finally(() => setLoading(false));
+        setTreeVersion((v) => v + 1);
     }, [path]);
 
     useEffect(load, [load]);
+    useEffect(loadIcons, [loadIcons]);
 
     const join = (name: string) => (path === '' ? name : `${path}/${name}`);
 
@@ -112,17 +144,49 @@ export default function Files() {
         localStorage.setItem('pd_view', v);
     };
 
-    const onUpload = async (files: FileList | null) => {
-        if (!files || files.length === 0) return;
+    // ---- 上传:大文件分片,小文件普通 multipart ----
+    const uploadBig = async (file: File) => {
+        const { id } = await api.uploadInit();
+        const chunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
+        for (let i = 0; i < chunks; i++) {
+            const blob = file.slice(i * CHUNK_SIZE, Math.min(file.size, (i + 1) * CHUNK_SIZE));
+            let tries = 0;
+            // 每块最多重试 3 次,网络波动不用整个重来
+            for (;;) {
+                try {
+                    await api.uploadChunk(id, i, blob);
+                    break;
+                } catch (e) {
+                    if (++tries >= 3) throw e;
+                    await new Promise((r) => setTimeout(r, 1500));
+                }
+            }
+            setBigUpload({ name: file.name, pct: ((i + 1) / chunks) * 100 });
+        }
+        await api.uploadComplete(id, join(file.name), chunks);
+    };
+
+    const onUpload = async (fileList: FileList | null) => {
+        if (!fileList || fileList.length === 0) return;
+        const all = Array.from(fileList);
+        const small = all.filter((f) => f.size <= BIG_FILE);
+        const big = all.filter((f) => f.size > BIG_FILE);
         setUploading(true);
         try {
-            const r = await api.upload(path, files);
-            toast.success(`已上传 ${r.saved.length} 个文件`);
+            if (small.length > 0) {
+                await api.upload(path, small);
+            }
+            for (const f of big) {
+                setBigUpload({ name: f.name, pct: 0 });
+                await uploadBig(f);
+            }
+            toast.success(`已上传 ${all.length} 个文件`);
             load();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '上传失败');
         } finally {
             setUploading(false);
+            setBigUpload(null);
             if (fileInput.current) fileInput.current.value = '';
         }
     };
@@ -137,9 +201,21 @@ export default function Files() {
         }
     };
 
+    // 文件夹改名/移动时迁移自定义图标
+    const migrateIcon = async (oldPath: string, newPath: string) => {
+        const icon = icons[oldPath];
+        if (icon) {
+            await api.setIcon(newPath, icon).catch(() => undefined);
+            await api.setIcon(oldPath, '').catch(() => undefined);
+            loadIcons();
+        }
+    };
+
     const doMoveTo = (src: string, destDir: string) =>
         run(async () => {
             await api.move(src, destDir);
+            const base = src.includes('/') ? src.slice(src.lastIndexOf('/') + 1) : src;
+            await migrateIcon(src, destDir === '' ? base : `${destDir}/${base}`);
             toast.success('已移动');
         });
 
@@ -213,6 +289,9 @@ export default function Files() {
         doMoveTo(src, dest);
     };
 
+    const entryIcon = (e: FileEntry) =>
+        e.dir ? (icons[join(e.name)] ?? '📁') : KIND_ICON[fileKind(e.name)];
+
     const actions = (e: FileEntry) => (
         <span className="flex gap-0.5 shrink-0 flex-wrap justify-end">
             {!e.dir && (
@@ -226,6 +305,11 @@ export default function Files() {
                         分享
                     </Button>
                 </>
+            )}
+            {e.dir && (
+                <Button variant="ghost" size="sm" onClick={() => setIconTarget(e)}>
+                    图标
+                </Button>
             )}
             <Button
                 variant="ghost"
@@ -297,112 +381,150 @@ export default function Files() {
 
             <Breadcrumb path={path} />
 
-            <Card
-                className={cn('p-0 overflow-hidden', dragOver && 'border-leaf border-dashed')}
-            >
-                {loading ? (
-                    <div className="text-center text-ink-soft py-10 text-sm">加载中…</div>
-                ) : entries.length === 0 ? (
-                    <div className="text-center text-ink-soft py-10 text-sm">
-                        这里空空如也,拖拽文件到此处上传 🍃
+            {bigUpload && (
+                <Card className="mb-3 py-3">
+                    <div className="flex items-center gap-2 text-sm font-bold mb-1.5">
+                        <span>⬆ 分片上传中:{bigUpload.name}</span>
                     </div>
-                ) : view === 'list' ? (
-                    <div>
-                        {entries.map((e, idx) => (
-                            <div
-                                key={e.name}
-                                draggable
-                                onDragStart={(ev) => onRowDragStart(ev, e)}
-                                onDragOver={(ev) => {
-                                    if (
-                                        e.dir &&
-                                        ev.dataTransfer.types.includes(DND_TYPE)
-                                    ) {
-                                        ev.preventDefault();
-                                        ev.stopPropagation();
-                                        setDropTarget(e.name);
-                                    }
-                                }}
-                                onDragLeave={() =>
-                                    dropTarget === e.name && setDropTarget(null)
-                                }
-                                onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
-                                className={cn(
-                                    'flex items-center gap-2.5 px-4 py-2 border-b border-dashed border-line last:border-b-0 hover:bg-paper-2/60 flex-wrap',
-                                    dropTarget === e.name &&
-                                        'bg-leaf-soft outline-2 outline-dashed outline-leaf -outline-offset-2',
-                                )}
-                            >
-                                <button
-                                    className="flex items-center gap-2 flex-1 min-w-0 basis-full sm:basis-auto font-bold text-left cursor-pointer truncate"
-                                    onClick={() => openEntry(e, idx)}
-                                    title={e.dir ? `${e.name}(可把文件拖进来)` : e.name}
-                                >
-                                    <span className="text-lg shrink-0">
-                                        {KIND_ICON[fileKind(e.name, e.dir)]}
-                                    </span>
-                                    <span className="truncate">{e.name}</span>
-                                </button>
-                                <span className="text-xs text-ink-soft w-20 text-right hidden sm:block shrink-0">
-                                    {e.dir ? '-' : formatBytes(e.size)}
-                                </span>
-                                <span className="text-xs text-ink-soft w-28 text-right hidden lg:block shrink-0">
-                                    {formatTime(e.mtime)}
-                                </span>
-                                {actions(e)}
+                    <Progress percent={bigUpload.pct} />
+                </Card>
+            )}
+
+            <div className="flex gap-4 items-start">
+                {/* 目录树 */}
+                <FileTree
+                    className="hidden lg:block w-52 shrink-0 max-h-[72vh] sticky top-20"
+                    currentPath={path}
+                    refreshKey={treeVersion}
+                    icons={icons}
+                    onNavigate={(p) => navigate(`/files/${p}`)}
+                />
+
+                <div className="flex-1 min-w-0">
+                    <Card
+                        className={cn(
+                            'p-0 overflow-hidden',
+                            dragOver && 'border-leaf border-dashed',
+                        )}
+                    >
+                        {loading ? (
+                            <div className="text-center text-ink-soft py-10 text-sm">
+                                加载中…
                             </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-4">
-                        {entries.map((e, idx) => (
-                            <div
-                                key={e.name}
-                                draggable
-                                onDragStart={(ev) => onRowDragStart(ev, e)}
-                                onDragOver={(ev) => {
-                                    if (
-                                        e.dir &&
-                                        ev.dataTransfer.types.includes(DND_TYPE)
-                                    ) {
-                                        ev.preventDefault();
-                                        ev.stopPropagation();
-                                        setDropTarget(e.name);
-                                    }
-                                }}
-                                onDragLeave={() =>
-                                    dropTarget === e.name && setDropTarget(null)
-                                }
-                                onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
-                                className={cn(
-                                    'rounded-2xl border-2 border-line overflow-hidden bg-paper flex flex-col',
-                                    dropTarget === e.name && 'border-leaf bg-leaf-soft',
-                                )}
-                            >
-                                <button
-                                    className="cursor-pointer text-left"
-                                    onClick={() => openEntry(e, idx)}
-                                    title={e.name}
-                                >
-                                    <Thumb path={join(e.name)} name={e.name} dir={e.dir} />
-                                    <div className="px-2.5 pt-1.5 font-bold text-xs truncate">
-                                        {e.name}
-                                    </div>
-                                    <div className="px-2.5 pb-1 text-[11px] text-ink-soft">
-                                        {e.dir ? '文件夹' : formatBytes(e.size)}
-                                    </div>
-                                </button>
-                                <div className="px-1 pb-1.5 flex justify-center">
-                                    {actions(e)}
-                                </div>
+                        ) : entries.length === 0 ? (
+                            <div className="text-center text-ink-soft py-10 text-sm">
+                                这里空空如也,拖拽文件到此处上传 🍃
                             </div>
-                        ))}
-                    </div>
-                )}
-            </Card>
-            <p className="text-xs text-ink-soft mt-2">
-                💡 拖拽文件行到文件夹上可直接移动;拖拽本地文件到列表上传
-            </p>
+                        ) : view === 'list' ? (
+                            <div>
+                                {entries.map((e, idx) => (
+                                    <div
+                                        key={e.name}
+                                        draggable
+                                        onDragStart={(ev) => onRowDragStart(ev, e)}
+                                        onDragOver={(ev) => {
+                                            if (
+                                                e.dir &&
+                                                ev.dataTransfer.types.includes(DND_TYPE)
+                                            ) {
+                                                ev.preventDefault();
+                                                ev.stopPropagation();
+                                                setDropTarget(e.name);
+                                            }
+                                        }}
+                                        onDragLeave={() =>
+                                            dropTarget === e.name && setDropTarget(null)
+                                        }
+                                        onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
+                                        className={cn(
+                                            'flex items-center gap-2.5 px-4 py-2 border-b border-dashed border-line last:border-b-0 hover:bg-paper-2/60 flex-wrap',
+                                            dropTarget === e.name &&
+                                                'bg-leaf-soft outline-2 outline-dashed outline-leaf -outline-offset-2',
+                                        )}
+                                    >
+                                        <button
+                                            className="flex items-center gap-2 flex-1 min-w-0 basis-full sm:basis-auto font-bold text-left cursor-pointer truncate"
+                                            onClick={() => openEntry(e, idx)}
+                                            title={
+                                                e.dir
+                                                    ? `${e.name}(可把文件拖进来)`
+                                                    : e.name
+                                            }
+                                        >
+                                            <span className="text-lg shrink-0">
+                                                {entryIcon(e)}
+                                            </span>
+                                            <span className="truncate">{e.name}</span>
+                                        </button>
+                                        <span className="text-xs text-ink-soft w-20 text-right hidden sm:block shrink-0">
+                                            {e.dir ? '-' : formatBytes(e.size)}
+                                        </span>
+                                        <span className="text-xs text-ink-soft w-28 text-right hidden xl:block shrink-0">
+                                            {formatTime(e.mtime)}
+                                        </span>
+                                        {actions(e)}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 p-4">
+                                {entries.map((e, idx) => (
+                                    <div
+                                        key={e.name}
+                                        draggable
+                                        onDragStart={(ev) => onRowDragStart(ev, e)}
+                                        onDragOver={(ev) => {
+                                            if (
+                                                e.dir &&
+                                                ev.dataTransfer.types.includes(DND_TYPE)
+                                            ) {
+                                                ev.preventDefault();
+                                                ev.stopPropagation();
+                                                setDropTarget(e.name);
+                                            }
+                                        }}
+                                        onDragLeave={() =>
+                                            dropTarget === e.name && setDropTarget(null)
+                                        }
+                                        onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
+                                        className={cn(
+                                            'rounded-2xl border-2 border-line overflow-hidden bg-paper flex flex-col',
+                                            dropTarget === e.name &&
+                                                'border-leaf bg-leaf-soft',
+                                        )}
+                                    >
+                                        <button
+                                            className="cursor-pointer text-left"
+                                            onClick={() => openEntry(e, idx)}
+                                            title={e.name}
+                                        >
+                                            <Thumb
+                                                path={join(e.name)}
+                                                name={e.name}
+                                                dir={e.dir}
+                                                dirIcon={icons[join(e.name)]}
+                                            />
+                                            <div className="px-2.5 pt-1.5 font-bold text-xs truncate">
+                                                {e.name}
+                                            </div>
+                                            <div className="px-2.5 pb-1 text-[11px] text-ink-soft">
+                                                {e.dir ? '文件夹' : formatBytes(e.size)}
+                                            </div>
+                                        </button>
+                                        <div className="px-1 pb-1.5 flex justify-center">
+                                            {actions(e)}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </Card>
+                    <p className="text-xs text-ink-soft mt-2">
+                        💡 拖拽文件行到文件夹(或左侧目录树同名文件夹)可移动;拖拽本地文件到列表上传;超过
+                        64MB 自动分片上传
+                    </p>
+                </div>
+            </div>
 
             {/* 新建文件夹 */}
             <Dialog open={mkdirOpen} onOpenChange={(o) => !o && setMkdirOpen(false)}>
@@ -454,8 +576,18 @@ export default function Files() {
                         onOk={() =>
                             renameTarget &&
                             run(
-                                () =>
-                                    api.rename(join(renameTarget.name), renameName.trim()),
+                                async () => {
+                                    await api.rename(
+                                        join(renameTarget.name),
+                                        renameName.trim(),
+                                    );
+                                    if (renameTarget.dir) {
+                                        await migrateIcon(
+                                            join(renameTarget.name),
+                                            join(renameName.trim()),
+                                        );
+                                    }
+                                },
                                 () => setRenameTarget(null),
                             )
                         }
@@ -470,6 +602,41 @@ export default function Files() {
                 onClose={() => setMoveTarget(null)}
                 onSelect={(dir) => moveTarget && doMoveTo(join(moveTarget.name), dir)}
             />
+
+            {/* 文件夹图标 */}
+            <Dialog open={iconTarget !== null} onOpenChange={(o) => !o && setIconTarget(null)}>
+                <DialogContent title={`「${iconTarget?.name ?? ''}」的图标`}>
+                    <div className="grid grid-cols-8 gap-1.5">
+                        {FOLDER_EMOJIS.map((em) => (
+                            <button
+                                key={em}
+                                className={cn(
+                                    'text-xl rounded-xl py-1.5 cursor-pointer border-2 transition-colors',
+                                    iconTarget &&
+                                        (icons[join(iconTarget.name)] ?? '📁') === em
+                                        ? 'border-leaf bg-leaf-soft'
+                                        : 'border-transparent bg-paper-2 hover:border-line',
+                                )}
+                                onClick={() =>
+                                    iconTarget &&
+                                    run(
+                                        async () => {
+                                            await api.setIcon(
+                                                join(iconTarget.name),
+                                                em === '📁' ? '' : em,
+                                            );
+                                            loadIcons();
+                                        },
+                                        () => setIconTarget(null),
+                                    )
+                                }
+                            >
+                                {em}
+                            </button>
+                        ))}
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             {/* 删除(进回收站) */}
             <Dialog
@@ -510,7 +677,8 @@ export default function Files() {
                             </code>
                             {sharePass && shareResult.type === 'page' && (
                                 <p className="text-sm mt-2">
-                                    提取密码:<code className="bg-paper-2 rounded px-2">{sharePass}</code>
+                                    提取密码:
+                                    <code className="bg-paper-2 rounded px-2">{sharePass}</code>
                                 </p>
                             )}
                             <div className="flex gap-2 mt-4">
@@ -556,7 +724,7 @@ export default function Files() {
                                 <option value="720">30 天</option>
                             </NativeSelect>
                             <p className="text-xs text-ink-soft">
-                                生成后可在「设置 → 分享管理」统一查看和删除
+                                生成后可在「分享管理」统一查看和删除
                             </p>
                             <DialogFooter onOk={doShare} okText="生成链接" />
                         </div>

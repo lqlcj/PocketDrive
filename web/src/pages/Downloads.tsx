@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { DownloadTask } from '../api';
@@ -39,6 +39,10 @@ export default function Downloads() {
 
     useEffect(() => {
         load();
+        // 默认保存目录来自「下载设置」
+        api.downloadSettings()
+            .then((r) => setDir((d) => (d === '' ? r.settings.defaultDir : d)))
+            .catch(() => undefined);
         const t = setInterval(load, 2000);
         return () => clearInterval(t);
     }, [load]);
@@ -72,6 +76,9 @@ export default function Downloads() {
             <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <h2 className="text-xl font-extrabold">⬇️ 离线下载</h2>
                 {degraded && <Badge tone="red">aria2 不可达,任务暂无法下发</Badge>}
+                <Link to="/downloads/settings" className="ml-auto">
+                    <Button size="sm">⚙️ 下载设置</Button>
+                </Link>
             </div>
 
             <Card className="mb-4 flex flex-col gap-2.5">

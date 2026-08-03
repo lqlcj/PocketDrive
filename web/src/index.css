@@ -2,31 +2,31 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* 岛屿手账主题:白天(奶油沙滩) / 黑夜(星空海面) */
+/* 主题:白天(Claude 风象牙白 + 赤陶橙) / 黑夜(暖炭色) */
 :root {
-    --background: #f2ecd8;
-    --paper: #fffbef;
-    --paper-2: #f3ecd9;
-    --ink: #5b4a36;
-    --ink-soft: #8a7a63;
-    --line: #e6dcc3;
-    --leaf: #6db33f;
-    --leaf-dark: #4a7c3f;
-    --leaf-soft: #e6f4d9;
+    --background: #faf9f5;
+    --paper: #ffffff;
+    --paper-2: #f0eee6;
+    --ink: #3d3929;
+    --ink-soft: #87837a;
+    --line: #e8e4da;
+    --leaf: #d97757;
+    --leaf-dark: #b4552d;
+    --leaf-soft: #f6e8e2;
     --danger: #c0392b;
     --danger-soft: #fdeceb;
 }
 
 .dark {
-    --background: #1c2431;
-    --paper: #253044;
-    --paper-2: #2d3950;
-    --ink: #e9e2cd;
-    --ink-soft: #9aa4b5;
-    --line: #3a465c;
-    --leaf: #7fc457;
-    --leaf-dark: #a5d98a;
-    --leaf-soft: #2f4230;
+    --background: #262624;
+    --paper: #30302e;
+    --paper-2: #3a3937;
+    --ink: #f0eee6;
+    --ink-soft: #a8a397;
+    --line: #4a4844;
+    --leaf: #d97757;
+    --leaf-dark: #e0916f;
+    --leaf-soft: #4a3327;
     --danger: #e57368;
     --danger-soft: #4a2f2d;
 }

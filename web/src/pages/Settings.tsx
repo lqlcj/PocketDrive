@@ -2,12 +2,11 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { Profile, Share } from '../api';
+import type { Profile } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/progress';
-import { formatTime } from '../util';
 import { cn } from '../lib/utils';
 
 const AVATARS = [
@@ -32,19 +31,13 @@ export default function Settings({
     const [confirm, setConfirm] = useState('');
     const [saving, setSaving] = useState(false);
 
-    const [shares, setShares] = useState<Share[]>([]);
     const [aria2OK, setAria2OK] = useState<boolean | null>(null);
     const [ytOK, setYtOK] = useState<boolean | null>(null);
     const [ytVer, setYtVer] = useState('');
     const [updating, setUpdating] = useState(false);
     const [updateOut, setUpdateOut] = useState('');
 
-    const loadShares = () => {
-        api.shares().then((r) => setShares(r.shares)).catch(() => undefined);
-    };
-
     useEffect(() => {
-        loadShares();
         api.downloads().then((r) => setAria2OK(!r.degraded)).catch(() => setAria2OK(false));
         api.ytdlp()
             .then((r) => {
@@ -100,28 +93,6 @@ export default function Settings({
             toast.error(e instanceof Error ? e.message : '更新失败');
         } finally {
             setUpdating(false);
-        }
-    };
-
-    const shareLink = (s: Share) =>
-        `${window.location.origin}${s.type === 'direct' ? '/d/' : '/s/'}${s.token}`;
-
-    const copyLink = async (s: Share) => {
-        try {
-            await navigator.clipboard.writeText(shareLink(s));
-            toast.success('已复制链接');
-        } catch {
-            toast.warning('复制失败');
-        }
-    };
-
-    const delShare = async (s: Share) => {
-        try {
-            await api.deleteShare(s.id);
-            toast.success('已删除分享');
-            loadShares();
-        } catch (e) {
-            toast.error(e instanceof Error ? e.message : '删除失败');
         }
     };
 
@@ -200,46 +171,6 @@ export default function Settings({
                             保存
                         </Button>
                     </div>
-                </Card>
-
-                <Card className="md:col-span-2">
-                    <CardTitle>🔗 分享管理</CardTitle>
-                    {shares.length === 0 ? (
-                        <p className="text-sm text-ink-soft">
-                            还没有分享。在「我的文件」里点某个文件的「分享」即可创建分享页或直链。
-                        </p>
-                    ) : (
-                        shares.map((s) => (
-                            <div
-                                key={s.id}
-                                className="flex items-center gap-2.5 py-2 border-b border-dashed border-line last:border-b-0 flex-wrap"
-                            >
-                                <Badge tone={s.type === 'direct' ? 'blue' : 'green'}>
-                                    {s.type === 'direct' ? '直链' : '分享页'}
-                                </Badge>
-                                <div className="flex-1 min-w-0">
-                                    <div className="font-bold text-sm truncate">{s.path}</div>
-                                    <div className="text-xs text-ink-soft truncate">
-                                        {s.hasPassword ? '🔒 有密码' : '公开'} ·{' '}
-                                        {s.expiresAt
-                                            ? `${formatTime(s.expiresAt)} 过期`
-                                            : '永久'}{' '}
-                                        · {formatTime(s.createdAt)}
-                                    </div>
-                                </div>
-                                <Button size="sm" onClick={() => copyLink(s)}>
-                                    复制
-                                </Button>
-                                <Button
-                                    variant="ghost-danger"
-                                    size="sm"
-                                    onClick={() => delShare(s)}
-                                >
-                                    删除
-                                </Button>
-                            </div>
-                        ))
-                    )}
                 </Card>
 
                 <Card>

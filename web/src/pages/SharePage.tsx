@@ -14,6 +14,7 @@ export default function SharePage() {
     const [error, setError] = useState<string | null>(null);
     const [password, setPassword] = useState('');
     const [unlocked, setUnlocked] = useState(false);
+    const [playing, setPlaying] = useState(false);
 
     useEffect(() => {
         api.shareInfo(token)
@@ -58,6 +59,7 @@ export default function SharePage() {
 
     const kind = fileKind(info.name);
     const url = api.shareDownloadUrl(token, password);
+    const thumb = api.shareThumbUrl(token, password);
 
     return (
         <div className="min-h-screen flex items-center justify-center px-4 py-8">
@@ -99,14 +101,35 @@ export default function SharePage() {
                             // eslint-disable-next-line jsx-a11y/media-has-caption
                             <audio src={url} controls className="w-full" />
                         )}
-                        {kind === 'video' && browserPlayable(info.name) && (
-                            // eslint-disable-next-line jsx-a11y/media-has-caption
-                            <video
-                                src={url}
-                                controls
-                                className="w-full max-h-[55vh] rounded-xl bg-black"
-                            />
-                        )}
+                        {kind === 'video' &&
+                            browserPlayable(info.name) &&
+                            (playing ? (
+                                // eslint-disable-next-line jsx-a11y/media-has-caption
+                                <video
+                                    src={url}
+                                    controls
+                                    autoPlay
+                                    className="w-full max-h-[55vh] rounded-xl bg-black"
+                                />
+                            ) : (
+                                <button
+                                    className="relative w-full rounded-xl overflow-hidden bg-paper-2 cursor-pointer"
+                                    onClick={() => setPlaying(true)}
+                                >
+                                    <img
+                                        src={thumb}
+                                        alt=""
+                                        className="w-full max-h-[55vh] object-contain"
+                                        onError={(e) => {
+                                            (e.target as HTMLImageElement).style.display =
+                                                'none';
+                                        }}
+                                    />
+                                    <span className="absolute inset-0 flex items-center justify-center text-6xl drop-shadow">
+                                        ▶️
+                                    </span>
+                                </button>
+                            ))}
                         <a
                             href={api.shareDownloadUrl(token, password, true)}
                             download

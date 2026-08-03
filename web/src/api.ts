@@ -112,6 +112,15 @@ export interface Profile {
     avatar: string;
 }
 
+export interface DownloadSettings {
+    maxConcurrent: number;
+    maxDownloadLimit: string;
+    maxUploadLimit: string;
+    seedTimeMin: number;
+    trackerAuto: boolean;
+    defaultDir: string;
+}
+
 export interface DiskInfo {
     total: number;
     used: number;
@@ -174,6 +183,35 @@ export const api = {
         req<{ items: IndexItem[] }>(`/api/v1/category?kind=${encodeURIComponent(kind)}`),
     stats: () => req<{ stats: Record<string, number> }>('/api/v1/stats'),
 
+    icons: () => req<{ icons: Record<string, string> }>('/api/v1/icons'),
+    setIcon: (path: string, icon: string) =>
+        post<{ ok: boolean }>('/api/v1/icons', { path, icon }),
+
+    uploadInit: () => post<{ id: string }>('/api/v1/files/upload/init', {}),
+    uploadChunk: async (id: string, index: number, blob: Blob) => {
+        const resp = await fetch(
+            `/api/v1/files/upload/chunk?id=${id}&index=${index}`,
+            { method: 'POST', body: blob },
+        );
+        if (!resp.ok) {
+            const body = await resp.json().catch(() => null);
+            throw new ApiError(resp.status, body?.error ?? `分片 ${index} 上传失败`);
+        }
+    },
+    uploadComplete: (id: string, path: string, chunks: number) =>
+        post<{ ok: boolean }>('/api/v1/files/upload/complete', { id, path, chunks }),
+
+    downloadSettings: () =>
+        req<{
+            settings: DownloadSettings;
+            trackerCount: number;
+            trackerUpdatedAt: string;
+        }>('/api/v1/downloads/settings'),
+    saveDownloadSettings: (s: DownloadSettings) =>
+        post<{ ok: boolean }>('/api/v1/downloads/settings', s),
+    updateTrackers: () =>
+        post<{ ok: boolean; count: number }>('/api/v1/downloads/trackers/update', {}),
+
     storage: () => req<{ disk: DiskInfo; recent: RecentFile[] | null }>('/api/v1/storage'),
 
     downloads: () =>
@@ -208,4 +246,6 @@ export const api = {
     shareInfo: (token: string) => req<ShareInfo>(`/api/v1/public/share/${token}`),
     shareDownloadUrl: (token: string, password: string, dl = false) =>
         `/api/v1/public/share/${token}/download?password=${encodeURIComponent(password)}${dl ? '&dl=1' : ''}`,
+    shareThumbUrl: (token: string, password: string) =>
+        `/api/v1/public/share/${token}/thumb?password=${encodeURIComponent(password)}`,
 };

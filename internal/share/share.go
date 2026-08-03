@@ -18,11 +18,13 @@ import (
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/thumbs"
 )
 
 type Service struct {
-	db    *gorm.DB
-	files *files.Service
+	db     *gorm.DB
+	files  *files.Service
+	thumbs *thumbs.Service
 
 	mu      sync.Mutex
 	limiter map[string]*ipEntry
@@ -33,8 +35,8 @@ type ipEntry struct {
 	blockedUntil time.Time
 }
 
-func New(gdb *gorm.DB, fs *files.Service) *Service {
-	return &Service{db: gdb, files: fs, limiter: make(map[string]*ipEntry)}
+func New(gdb *gorm.DB, fs *files.Service, th *thumbs.Service) *Service {
+	return &Service{db: gdb, files: fs, thumbs: th, limiter: make(map[string]*ipEntry)}
 }
 
 func randToken(n int) string {
@@ -224,6 +226,21 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 			"attachment; filename*=UTF-8''"+url.PathEscape(fi.Name()))
 	}
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+}
+
+// HandleThumb serves a share's media thumbnail (public; password
+// checked the same way as download).
+func (s *Service) HandleThumb(w http.ResponseWriter, r *http.Request) {
+	sh, err := s.find(r.PathValue("token"))
+	if err != nil {
+		httpx.Err(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err := s.checkPassword(sh, r.URL.Query().Get("password"), httpx.ClientIP(r)); err != nil {
+		httpx.Err(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.thumbs.Serve(w, r, sh.Path)
 }
 
 // HandleDirect serves /d/{token}: raw file stream for direct-link

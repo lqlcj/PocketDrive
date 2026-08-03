@@ -11,15 +11,12 @@ import type { Theme } from '../theme';
 import { cn } from '../lib/utils';
 
 const NAV: Array<{ section?: string; to: string; label: string; icon: string; end?: boolean }> = [
-    { to: '/', label: '小岛', icon: '🌴', end: true },
-    { section: '🏠 小屋', to: '/files', label: '我的文件', icon: '📁' },
-    { to: '/notes', label: '笔记本', icon: '📔' },
-    { section: '📦 储藏室', to: '/downloads', label: '离线下载', icon: '⬇️' },
+    { to: '/', label: '主页', icon: '🏝️', end: true },
+    { to: '/files', label: '我的文件', icon: '📁' },
+    { to: '/downloads', label: '离线下载', icon: '⬇️' },
     { to: '/video', label: 'yt下载', icon: '🎬' },
-    { section: '🖼️ 展览馆', to: '/gallery', label: '照片', icon: '🖼️' },
-    { section: '🎵 留声机', to: '/music', label: '音乐', icon: '🎵' },
-    { section: '📺 影院', to: '/cinema', label: '视频', icon: '📺' },
-    { section: ' ', to: '/trash', label: '垃圾桶', icon: '🗑️' },
+    { to: '/shares', label: '分享管理', icon: '🔗' },
+    { to: '/trash', label: '垃圾桶', icon: '🗑️' },
     { to: '/settings', label: '设置', icon: '⚙️' },
 ];
 

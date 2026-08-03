@@ -62,6 +62,12 @@ type TrashItem struct {
 	DeletedAt time.Time `json:"deletedAt"`
 }
 
+// FolderIcon 记录文件夹的自定义 emoji 图标
+type FolderIcon struct {
+	Path string `gorm:"primaryKey;size:512" json:"path"`
+	Icon string `gorm:"size:16" json:"icon"`
+}
+
 func Open(path string) (*gorm.DB, error) {
 	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	g, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -76,7 +82,7 @@ func Open(path string) (*gorm.DB, error) {
 	}
 	// glebarez/sqlite 纯 Go 驱动,单连接避免写锁竞争
 	sqlDB.SetMaxOpenConns(1)
-	if err := g.AutoMigrate(&Setting{}, &DownloadTask{}, &YtdlpTask{}, &Share{}, &TrashItem{}); err != nil {
+	if err := g.AutoMigrate(&Setting{}, &DownloadTask{}, &YtdlpTask{}, &Share{}, &TrashItem{}, &FolderIcon{}); err != nil {
 		return nil, err
 	}
 	return g, nil

@@ -9,6 +9,7 @@ import (
 	"pocketdrive/internal/dav"
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/icons"
 	"pocketdrive/internal/index"
 	"pocketdrive/internal/share"
 	"pocketdrive/internal/storage"
@@ -28,6 +29,7 @@ type Deps struct {
 	Thumbs  *thumbs.Service
 	Trash   *trash.Service
 	Index   *index.Service
+	Icons   *icons.Service
 }
 
 func New(cfg *config.Config, d Deps) *http.Server {
@@ -43,6 +45,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	// 公开分享(免登录)
 	mux.HandleFunc("GET /api/v1/public/share/{token}", d.Share.HandleInfo)
 	mux.HandleFunc("GET /api/v1/public/share/{token}/download", d.Share.HandleDownload)
+	mux.HandleFunc("GET /api/v1/public/share/{token}/thumb", d.Share.HandleThumb)
 	mux.HandleFunc("GET /d/{token}", d.Share.HandleDirect)
 
 	// authenticated API
@@ -54,6 +57,9 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/files", d.Files.HandleList)
 	api.HandleFunc("POST /api/v1/files/mkdir", d.Files.HandleMkdir)
 	api.HandleFunc("POST /api/v1/files/upload", d.Files.HandleUpload)
+	api.HandleFunc("POST /api/v1/files/upload/init", d.Files.HandleUploadInit)
+	api.HandleFunc("POST /api/v1/files/upload/chunk", d.Files.HandleUploadChunk)
+	api.HandleFunc("POST /api/v1/files/upload/complete", d.Files.HandleUploadComplete)
 	api.HandleFunc("GET /api/v1/files/download", d.Files.HandleDownload)
 	api.HandleFunc("GET /api/v1/files/content", d.Files.HandleContent)
 	api.HandleFunc("POST /api/v1/files/rename", d.Files.HandleRename)
@@ -71,6 +77,13 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/search", d.Index.HandleSearch)
 	api.HandleFunc("GET /api/v1/category", d.Index.HandleCategory)
 	api.HandleFunc("GET /api/v1/stats", d.Index.HandleStats)
+
+	api.HandleFunc("GET /api/v1/icons", d.Icons.HandleList)
+	api.HandleFunc("POST /api/v1/icons", d.Icons.HandleSet)
+
+	api.HandleFunc("GET /api/v1/downloads/settings", d.Aria2.HandleGetSettings)
+	api.HandleFunc("POST /api/v1/downloads/settings", d.Aria2.HandleSaveSettings)
+	api.HandleFunc("POST /api/v1/downloads/trackers/update", d.Aria2.HandleUpdateTrackers)
 
 	api.HandleFunc("GET /api/v1/shares", d.Share.HandleList)
 	api.HandleFunc("POST /api/v1/shares", d.Share.HandleCreate)
