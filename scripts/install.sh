@@ -30,15 +30,20 @@ rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c "$1"; }
 
 if [ ! -f .env ]; then
     ADMIN_PASS=$(rand 16)
-    ARIA2_SECRET=$(rand 24)
     cat > .env <<EOF
 POCKETDRIVE_ADMIN_PASSWORD=$ADMIN_PASS
-ARIA2_SECRET=$ARIA2_SECRET
 EOF
     chmod 600 .env
     say "已生成随机密码,保存在 $DIR/.env"
 else
     say "检测到已有配置,沿用原密码(升级模式)"
+fi
+
+# 旧版是 pocketdrive + aria2 两个容器;新版把 aria2 收进主容器里,
+# 升级时先把旧的 aria2 容器停掉,免得端口和下载目录打架
+if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx pocketdrive-aria2; then
+    say "检测到旧版的 aria2 容器,正在停用(aria2 已内置到主容器)…"
+    docker rm -f pocketdrive-aria2 >/dev/null 2>&1 || true
 fi
 
 cat > docker-compose.yml <<EOF
@@ -49,33 +54,16 @@ services:
         restart: unless-stopped
         ports:
             - '16688:16688'
+            - '6888:6888'
+            - '6888:6888/udp'
         environment:
             - POCKETDRIVE_DATA_DIR=/data
             - POCKETDRIVE_DB=/config/pocketdrive.db
             - POCKETDRIVE_ADMIN_USER=admin
             - POCKETDRIVE_ADMIN_PASSWORD=\${POCKETDRIVE_ADMIN_PASSWORD}
-            - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
-            - POCKETDRIVE_ARIA2_SECRET=\${ARIA2_SECRET}
-            - POCKETDRIVE_ARIA2_DATA_DIR=/data
         volumes:
             - ./data:/data
             - ./config:/config
-        depends_on:
-            - aria2
-
-    aria2:
-        image: p3terx/aria2-pro
-        container_name: pocketdrive-aria2
-        restart: unless-stopped
-        environment:
-            - RPC_SECRET=\${ARIA2_SECRET}
-            - LISTEN_PORT=6888
-            - MAX_CONCURRENT_DOWNLOADS=3
-        volumes:
-            - ./data:/data
-        ports:
-            - '6888:6888'
-            - '6888:6888/udp'
 EOF
 
 say "拉取镜像并启动…"

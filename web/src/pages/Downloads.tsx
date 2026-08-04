@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-    CloudDownload,
     FileUp,
     Folder,
     FolderOpen,
@@ -115,9 +114,7 @@ export default function Downloads() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4 flex-wrap">
-                <h2 className="text-xl font-extrabold flex items-center gap-2">
-                    <CloudDownload className="size-5 text-leaf-dark" /> 离线下载
-                </h2>
+                <h2 className="text-xl font-extrabold">离线下载</h2>
                 {degraded && <Badge tone="red">aria2 不可达,任务暂无法下发</Badge>}
                 <Link to="/downloads/settings" className="ml-auto">
                     <Button size="sm">

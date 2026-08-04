@@ -88,3 +88,11 @@ export function officePreviewable(name: string): boolean {
     // 旧二进制格式里只有 .xls 能被 SheetJS 解析;.doc/.ppt 不支持
     return ['docx', 'xlsx', 'xls', 'pptx'].includes(ext);
 }
+
+/** 能不能在线解压。rar/7z 需要额外的二进制,没有做 */
+export function extractable(name: string): boolean {
+    const l = name.toLowerCase();
+    return ['.zip', '.tar.gz', '.tgz', '.tar.xz', '.txz', '.tar'].some((s) =>
+        l.endsWith(s),
+    );
+}

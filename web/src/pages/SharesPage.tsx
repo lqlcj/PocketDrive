@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link2, Lock } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { Share } from '../api';
@@ -42,9 +42,7 @@ export default function SharesPage() {
 
     return (
         <div>
-            <h2 className="text-xl font-extrabold mb-4 flex items-center gap-2">
-                <Link2 className="size-5 text-leaf-dark" /> 分享管理
-            </h2>
+            <h2 className="text-xl font-extrabold mb-4">分享管理</h2>
             {loading ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">加载中…</Card>
             ) : shares.length === 0 ? (

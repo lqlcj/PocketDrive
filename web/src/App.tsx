@@ -15,6 +15,8 @@ import Trash from './pages/Trash';
 import Settings from './pages/Settings';
 import StoragePage from './pages/StoragePage';
 import SharePage from './pages/SharePage';
+import UploadPanel from './components/UploadPanel';
+import { UploadProvider } from './upload/store';
 
 function Private({
     profile,
@@ -36,25 +38,29 @@ function Private({
         return <Login onLogin={onProfile} />;
     }
     return (
-        <Routes>
-            <Route element={<Layout profile={profile} onLogout={onLogout} />}>
-                {/* 我的文件即主页 */}
-                <Route path="/" element={<Navigate to="/files" replace />} />
-                <Route path="/files/*" element={<Files />} />
-                <Route path="/note/*" element={<NoteEditor />} />
-                <Route path="/downloads" element={<Downloads />} />
-                <Route path="/downloads/settings" element={<DownloadSettings />} />
-                <Route path="/video" element={<VideoDL />} />
-                <Route path="/shares" element={<SharesPage />} />
-                <Route path="/trash" element={<Trash />} />
-                <Route path="/storage" element={<StoragePage />} />
-                <Route
-                    path="/settings"
-                    element={<Settings profile={profile} onProfile={onProfile} />}
-                />
-                <Route path="*" element={<Navigate to="/files" replace />} />
-            </Route>
-        </Routes>
+        <UploadProvider>
+            <Routes>
+                <Route element={<Layout profile={profile} onLogout={onLogout} />}>
+                    {/* 我的文件即主页 */}
+                    <Route path="/" element={<Navigate to="/files" replace />} />
+                    <Route path="/files/*" element={<Files />} />
+                    <Route path="/note/*" element={<NoteEditor />} />
+                    <Route path="/downloads" element={<Downloads />} />
+                    <Route path="/downloads/settings" element={<DownloadSettings />} />
+                    <Route path="/video" element={<VideoDL />} />
+                    <Route path="/shares" element={<SharesPage />} />
+                    <Route path="/trash" element={<Trash />} />
+                    <Route path="/storage" element={<StoragePage />} />
+                    <Route
+                        path="/settings"
+                        element={<Settings profile={profile} onProfile={onProfile} />}
+                    />
+                    <Route path="*" element={<Navigate to="/files" replace />} />
+                </Route>
+            </Routes>
+            {/* 上传面板挂在路由外:切页面不打断正在传的文件 */}
+            <UploadPanel />
+        </UploadProvider>
     );
 }
 

@@ -27,14 +27,14 @@ export default function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
         e.preventDefault();
         const user = username.trim();
         if (!user || !password) {
-            setErrorMsg('用户名和密码都要填哦');
+            setErrorMsg('请填写用户名和密码');
             return;
         }
         setLoading(true);
         setErrorMsg('');
         try {
             const r = await api.login(user, password);
-            toast.success('欢迎回岛!');
+            toast.success('登录成功');
             onLogin({ user: r.user, avatar: r.avatar });
         } catch (err) {
             setErrorMsg(err instanceof Error ? err.message : '登录失败');

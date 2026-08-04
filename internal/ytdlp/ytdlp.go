@@ -388,22 +388,3 @@ func (m *Manager) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	m.db.Delete(&db.YtdlpTask{}, id)
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
-
-// HandleUpdate runs yt-dlp -U (self-update; works with the standalone
-// binary — package-manager installs will just report and exit).
-func (m *Manager) HandleUpdate(w http.ResponseWriter, r *http.Request) {
-	if ok, _ := m.Available(); !ok {
-		httpx.Err(w, http.StatusBadRequest, "yt-dlp 不可用")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, m.bin, "-U").CombinedOutput()
-	m.verMu.Lock()
-	m.verChecked = time.Time{} // 让下次 Available() 重新读版本
-	m.verMu.Unlock()
-	httpx.JSON(w, http.StatusOK, map[string]any{
-		"ok":     err == nil,
-		"output": string(out),
-	})
-}

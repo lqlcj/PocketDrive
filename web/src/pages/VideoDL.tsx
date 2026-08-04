@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clapperboard, Folder, FolderOpen, ListVideo, Music, Youtube } from 'lucide-react';
+import { Clapperboard, Folder, FolderOpen, ListVideo, Music } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { YtdlpTask } from '../api';
@@ -110,9 +110,7 @@ export default function VideoDL() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4 flex-wrap">
-                <h2 className="text-xl font-extrabold flex items-center gap-2">
-                    <Youtube className="size-5 text-leaf-dark" /> yt下载
-                </h2>
+                <h2 className="text-xl font-extrabold">yt下载</h2>
                 {available ? (
                     version && <Badge tone="green">yt-dlp {version}</Badge>
                 ) : (

@@ -56,7 +56,7 @@ func testSvc(t *testing.T) (*Service, string) {
 	if len(cs.Names()) != 1 {
 		t.Fatalf("挂载未加载: %v", cs.Names())
 	}
-	svc, err := New(filepath.Join(tmp, "data"), filepath.Join(tmp, "uploads"), cs)
+	svc, err := New(filepath.Join(tmp, "data"), filepath.Join(tmp, "uploads"), cs, gdb)
 	if err != nil {
 		t.Fatalf("files.New: %v", err)
 	}
@@ -244,6 +244,45 @@ func TestE2ECloudAPI(t *testing.T) {
 		lr := listOf(t, svc, sub)
 		if len(lr.Entries) != 1 || lr.Entries[0].Name != "readme.txt" {
 			t.Fatalf("移动后子目录 = %+v", lr.Entries)
+		}
+	})
+
+	t.Run("外部存储断点续传", func(t *testing.T) {
+		// 复刻「传了一半断线」:第二次 init 必须找回同一个 S3 分片上传,
+		// 并通过 ListParts 报出已传的分片
+		blob2 := make([]byte, testChunk+2048)
+		if _, err := rand.Read(blob2); err != nil {
+			t.Fatal(err)
+		}
+		p := root + "/续传.bin"
+		first := doInit(t, svc, p, int64(len(blob2)), 1785810000000, testChunk)
+		if first.ID == "" || !strings.HasPrefix(first.ID, "s3") {
+			t.Fatalf("会话 id = %q", first.ID)
+		}
+		putChunk(t, svc, first.ID, 0, blob2[:testChunk])
+
+		again := doInit(t, svc, p, int64(len(blob2)), 1785810000000, testChunk)
+		if again.ID != first.ID {
+			t.Fatalf("会话 id 变了:%s → %s", first.ID, again.ID)
+		}
+		if len(again.Uploaded) != 1 || again.Uploaded[0] != 0 {
+			t.Fatalf("已传分片 = %v, want [0]", again.Uploaded)
+		}
+
+		// 补完并合并——ETag 全部来自 ListParts,内存里没缓存任何分片
+		putChunk(t, svc, first.ID, 1, blob2[testChunk:])
+		mustCall(t, svc.HandleUploadComplete, "POST", "/api/v1/files/upload/complete",
+			map[string]any{"id": first.ID, "path": p, "chunks": 2})
+
+		lr := listOf(t, svc, root)
+		var size int64
+		for _, e := range lr.Entries {
+			if e.Name == "续传.bin" {
+				size = e.Size
+			}
+		}
+		if size != int64(len(blob2)) {
+			t.Fatalf("续传后大小 = %d, want %d", size, len(blob2))
 		}
 	})
 

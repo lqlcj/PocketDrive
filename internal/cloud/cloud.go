@@ -38,12 +38,28 @@ type Service struct {
 
 	mu     sync.RWMutex
 	mounts map[string]*S3Mount // name -> mount
+
+	uMu   sync.Mutex
+	usage map[string]usageEntry // name -> 用量缓存
 }
 
 func New(gdb *gorm.DB) *Service {
-	s := &Service{db: gdb, mounts: make(map[string]*S3Mount)}
+	s := &Service{
+		db:     gdb,
+		mounts: make(map[string]*S3Mount),
+		usage:  make(map[string]usageEntry),
+	}
 	s.reload()
 	return s
+}
+
+// policy 按挂载名取回策略(配额等元数据存在库里,不在 S3Mount 上)。
+func (s *Service) policy(name string) (*db.StoragePolicy, error) {
+	var p db.StoragePolicy
+	if err := s.db.First(&p, "name = ?", name).Error; err != nil {
+		return nil, err
+	}
+	return &p, nil
 }
 
 // reload 从 DB 重建挂载表(策略增删改后调用)。
@@ -106,20 +122,36 @@ type policyView struct {
 	AccessKey string `json:"accessKey"`
 	BasePath  string `json:"basePath"`
 	Connected bool   `json:"connected"`
+	// 容量:上限与当前用量(用量是缓存值,首次访问时后台统计)
+	QuotaBytes   int64 `json:"quotaBytes"`
+	UsedBytes    int64 `json:"usedBytes"`
+	UsedFiles    int64 `json:"usedFiles"`
+	UsagePending bool  `json:"usagePending"`
 }
 
 func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
 	var policies []db.StoragePolicy
 	s.db.Order("id").Find(&policies)
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	connected := make(map[string]bool, len(policies))
+	for _, p := range policies {
+		connected[p.Name] = s.mounts[p.Name] != nil
+	}
+	s.mu.RUnlock()
+
 	out := make([]policyView, len(policies))
 	for i, p := range policies {
-		out[i] = policyView{
+		v := policyView{
 			ID: p.ID, Name: p.Name, Type: p.Type, Endpoint: p.Endpoint,
 			Region: p.Region, Bucket: p.Bucket, AccessKey: p.AccessKey,
-			BasePath: p.BasePath, Connected: s.mounts[p.Name] != nil,
+			BasePath: p.BasePath, Connected: connected[p.Name],
+			QuotaBytes: p.QuotaBytes,
 		}
+		if v.Connected {
+			u := s.Usage(p.Name)
+			v.UsedBytes, v.UsedFiles, v.UsagePending = u.Bytes, u.Files, u.Pending
+		}
+		out[i] = v
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"policies": out})
 }
@@ -133,6 +165,8 @@ type policyReq struct {
 	AccessKey string `json:"accessKey"`
 	SecretKey string `json:"secretKey"`
 	BasePath  string `json:"basePath"`
+	// QuotaGB 是前端填的容量上限(GB),0 或留空 = 不限
+	QuotaGB float64 `json:"quotaGB"`
 }
 
 func (req *policyReq) normalize() error {
@@ -192,6 +226,10 @@ func (s *Service) HandleSave(w http.ResponseWriter, r *http.Request) {
 	p.Name, p.Type = req.Name, "s3"
 	p.Endpoint, p.Region, p.Bucket = req.Endpoint, req.Region, req.Bucket
 	p.AccessKey, p.BasePath = req.AccessKey, req.BasePath
+	p.QuotaBytes = int64(req.QuotaGB * float64(1<<30))
+	if p.QuotaBytes < 0 {
+		p.QuotaBytes = 0
+	}
 	if req.SecretKey != "" {
 		p.SecretKey = req.SecretKey
 	}

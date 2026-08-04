@@ -200,6 +200,32 @@ func (m *S3Mount) listAll(ctx context.Context, rel string) ([]string, error) {
 	return keys, nil
 }
 
+// WalkFiles 递归遍历 rel 下的所有文件,relPath 是相对 rel 的路径。
+// 目录标记对象(以 / 结尾)会被跳过——S3 没有真正的目录,打包时按文件
+// 路径重建层级即可。
+func (m *S3Mount) WalkFiles(ctx context.Context, rel string,
+	fn func(relPath string, size int64, mtime time.Time) error) error {
+	prefix := m.key(rel)
+	if prefix != "" {
+		prefix += "/"
+	}
+	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{
+		Prefix: prefix, Recursive: true,
+	}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		name := strings.TrimPrefix(obj.Key, prefix)
+		if name == "" || strings.HasSuffix(name, "/") {
+			continue
+		}
+		if err := fn(name, obj.Size, obj.LastModified); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Delete 删除文件或整个目录(外部存储不经回收站)。
 func (m *S3Mount) Delete(ctx context.Context, rel string) error {
 	keys, err := m.listAll(ctx, rel)
@@ -295,6 +321,27 @@ func (m *S3Mount) MultipartPut(ctx context.Context, rel, uploadID string, partNu
 		return minio.CompletePart{}, err
 	}
 	return minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}, nil
+}
+
+// MultipartUploaded 列出该次分片上传里已经传成功的分片(PartNumber → 分片)。
+// 断点续传靠它决定哪些块可以跳过;合并时也直接取这里的 ETag,因此进程重启
+// 后依然能把传了一半的文件收尾——不需要在内存里缓存分片列表。
+func (m *S3Mount) MultipartUploaded(ctx context.Context, rel, uploadID string) (map[int]minio.CompletePart, error) {
+	out := make(map[int]minio.CompletePart)
+	marker := 0
+	for {
+		res, err := m.core.ListObjectParts(ctx, m.bucket, m.key(rel), uploadID, marker, 1000)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range res.ObjectParts {
+			out[p.PartNumber] = minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}
+		}
+		if !res.IsTruncated {
+			return out, nil
+		}
+		marker = res.NextPartNumberMarker
+	}
 }
 
 func (m *S3Mount) MultipartComplete(ctx context.Context, rel, uploadID string, parts []minio.CompletePart) error {

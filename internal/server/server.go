@@ -3,9 +3,11 @@ package server
 import (
 	"net/http"
 
+	"pocketdrive/internal/archive"
 	"pocketdrive/internal/aria2"
 	"pocketdrive/internal/auth"
 	"pocketdrive/internal/cloud"
+	"pocketdrive/internal/components"
 	"pocketdrive/internal/config"
 	"pocketdrive/internal/dav"
 	"pocketdrive/internal/files"
@@ -21,17 +23,19 @@ import (
 )
 
 type Deps struct {
-	Auth    *auth.Service
-	Files   *files.Service
-	Storage *storage.Service
-	Aria2   *aria2.Manager
-	Ytdlp   *ytdlp.Manager
-	Share   *share.Service
-	Thumbs  *thumbs.Service
-	Trash   *trash.Service
-	Index   *index.Service
-	Icons   *icons.Service
-	Cloud   *cloud.Service
+	Auth       *auth.Service
+	Files      *files.Service
+	Storage    *storage.Service
+	Aria2      *aria2.Manager
+	Ytdlp      *ytdlp.Manager
+	Share      *share.Service
+	Thumbs     *thumbs.Service
+	Trash      *trash.Service
+	Index      *index.Service
+	Icons      *icons.Service
+	Cloud      *cloud.Service
+	Archive    *archive.Service
+	Components *components.Service
 }
 
 func New(cfg *config.Config, d Deps) *http.Server {
@@ -51,12 +55,17 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	// 直链两种形式等价:带文件名段的 URL 自带真实后缀,播放器/下载工具按后缀识别
 	mux.HandleFunc("GET /d/{token}", d.Share.HandleDirect)
 	mux.HandleFunc("GET /d/{token}/{name}", d.Share.HandleDirect)
+	// 头像要在登录页(未登录)也能显示,和分享一样走公开路由
+	mux.HandleFunc("GET /api/v1/public/avatar", d.Auth.HandleAvatar)
 
 	// authenticated API
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/auth/me", d.Auth.HandleMe)
 	api.HandleFunc("POST /api/v1/auth/password", d.Auth.HandleChangePassword)
 	api.HandleFunc("POST /api/v1/auth/profile", d.Auth.HandleProfile)
+	// 自定义头像:存在配置目录,不出现在网盘/WebDAV 里
+	api.HandleFunc("POST /api/v1/auth/avatar", d.Auth.HandleAvatarUpload)
+	api.HandleFunc("POST /api/v1/auth/avatar/delete", d.Auth.HandleAvatarDelete)
 
 	api.HandleFunc("GET /api/v1/files", d.Files.HandleList)
 	api.HandleFunc("POST /api/v1/files/mkdir", d.Files.HandleMkdir)
@@ -108,8 +117,22 @@ func New(cfg *config.Config, d Deps) *http.Server {
 		httpx.JSON(w, http.StatusOK, map[string]any{
 			"disk":   du,
 			"recent": d.Storage.Recent(),
+			// 挂载的外部存储各自的用量,首次访问返回 pending 并后台统计
+			"mounts": d.Cloud.UsageAll(),
 		})
 	})
+
+	// 档案:压缩/解压是异步任务;整盘导出导入用于换 VPS 迁移
+	api.HandleFunc("GET /api/v1/archive", d.Archive.HandleList)
+	api.HandleFunc("POST /api/v1/archive/compress", d.Archive.HandleCompress)
+	api.HandleFunc("POST /api/v1/archive/extract", d.Archive.HandleExtract)
+	api.HandleFunc("POST /api/v1/archive/delete", d.Archive.HandleDelete)
+	api.HandleFunc("GET /api/v1/admin/export", d.Archive.HandleExport)
+	api.HandleFunc("POST /api/v1/admin/import", d.Archive.HandleImport)
+
+	// 组件状态与升级:三个组件都装在 config 卷里,可各自在网页升级
+	api.HandleFunc("GET /api/v1/components", d.Components.HandleList)
+	api.HandleFunc("POST /api/v1/components/install", d.Components.HandleInstall)
 
 	api.HandleFunc("GET /api/v1/downloads", d.Aria2.HandleList)
 	api.HandleFunc("POST /api/v1/downloads", d.Aria2.HandleAdd)
@@ -122,7 +145,6 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("POST /api/v1/ytdlp", d.Ytdlp.HandleAdd)
 	api.HandleFunc("POST /api/v1/ytdlp/cancel", d.Ytdlp.HandleCancel)
 	api.HandleFunc("POST /api/v1/ytdlp/delete", d.Ytdlp.HandleDelete)
-	api.HandleFunc("POST /api/v1/ytdlp/update", d.Ytdlp.HandleUpdate)
 
 	mux.Handle("/api/v1/", d.Auth.Middleware(api))
 

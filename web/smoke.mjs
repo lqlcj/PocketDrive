@@ -1,6 +1,10 @@
-// 冒烟 v5(v0.4):动画登录页→文件页(主页)→目录树/图标→md 预览→xlsx 预览→
-// 直链→分享管理→离线下载(种子上传入口)→下载设置→yt(播放列表开关)→
-// 设置(合并资料卡/容量/新鲜事)→搜索→黑夜模式→直链免登录验证
+// 冒烟 v6(v0.5):动画登录页→文件页(主页)→目录树/图标(⋯ 菜单)→md 预览→
+// xlsx 预览→压缩/解压→直链→分享管理→离线下载(种子上传入口)→下载设置→
+// yt(播放列表开关)→设置(资料/容量/最近修改/组件状态/备份迁移)→搜索→
+// 黑夜模式→直链免登录验证
+//
+// 注意:会往 ../data 写测试文件(note.md / test.xlsx / music/rock),
+// 跑之前确认那不是你正在用的数据目录。
 import { chromium } from 'playwright-core';
 import fs from 'fs';
 import path from 'path';
@@ -60,8 +64,9 @@ await page.screenshot({ path: `${OUT}/41-files-home.png` });
 await page.click('button:has-text("music") >> nth=0');
 await page.waitForSelector('text=rock', { timeout: 5000 });
 
-// 给 rock 设置 emoji 图标
-await page.click('xpath=//div[button[contains(., "rock")]]//button[normalize-space()="图标"]');
+// 给 rock 设置 emoji 图标(行操作已收进「⋯」菜单)
+await page.click('xpath=//div[button[contains(., "rock")]]//button[@aria-label="更多操作"]');
+await page.click('text=设置图标');
 await page.waitForSelector('text=「rock」的图标', { timeout: 5000 });
 await page.click('button:has-text("🎮")');
 await page.waitForTimeout(500);
@@ -83,8 +88,25 @@ await page.screenshot({ path: `${OUT}/43-xlsx-preview.png` });
 await page.keyboard.press('Escape');
 await page.waitForTimeout(300);
 
-// 直链分享
-await page.click('xpath=//div[button[contains(., "note.md")]]//button[normalize-space()="分享"]');
+// 压缩 music 目录 → 等异步任务完成 → 再解压回来
+await page.click('xpath=//div[button[contains(., "music")]]//button[@aria-label="更多操作"]');
+await page.click('text=压缩为…');
+await page.waitForSelector('text=压缩包名称', { timeout: 5000 });
+await page.click('button:has-text("开始压缩")');
+// 任务是后台跑的,完成后列表里会出现压缩包
+await page.waitForSelector('text=music.zip', { timeout: 30000 });
+await page.screenshot({ path: `${OUT}/44-compressed.png` });
+
+await page.click('xpath=//div[button[contains(., "music.zip")]]//button[@aria-label="更多操作"]');
+await page.click('text=解压到此处');
+await page.waitForSelector('button:has-text("开始解压")', { timeout: 5000 });
+await page.click('button:has-text("开始解压")');
+await page.waitForTimeout(4000); // 解压完会刷新列表,内容覆盖回原处
+await page.waitForTimeout(300);
+
+// 直链分享(行操作已收进「⋯」菜单)
+await page.click('xpath=//div[button[contains(., "note.md")]]//button[@aria-label="更多操作"]');
+await page.click('text=分享');
 await page.waitForSelector('select', { timeout: 5000 });
 await page.selectOption('select >> nth=0', 'direct');
 await page.click('button:has-text("生成链接")');
@@ -112,12 +134,14 @@ await page.waitForSelector('text=整个播放列表批量下载', { timeout: 100
 await page.waitForTimeout(400);
 await page.screenshot({ path: `${OUT}/45-ytdl.png` });
 
-// 设置页:合并资料卡 + 容量 + 新鲜事
+// 设置页:合并资料卡 + 容量 + 最近修改 + 组件状态 + 备份迁移
 await page.click('a:has-text("设置") >> nth=0');
 await page.waitForSelector('text=个人资料', { timeout: 10000 });
 await page.waitForSelector('text=修改密码', { timeout: 5000 });
 await page.waitForSelector('text=仓库容量', { timeout: 5000 });
-await page.waitForSelector('text=新鲜事', { timeout: 5000 });
+await page.waitForSelector('text=最近修改', { timeout: 5000 });
+await page.waitForSelector('text=组件状态', { timeout: 5000 });
+await page.waitForSelector('text=备份与迁移', { timeout: 5000 });
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${OUT}/46-settings.png` });
 

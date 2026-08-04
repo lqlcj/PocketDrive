@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	settingsKey  = "download_settings"
-	trackersKey  = "bt_trackers"
+	settingsKey   = "download_settings"
+	trackersKey   = "bt_trackers"
 	trackersAtKey = "bt_trackers_at"
-	trackersURL  = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
+	trackersURL   = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
 )
 
 type Settings struct {

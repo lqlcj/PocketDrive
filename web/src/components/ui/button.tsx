@@ -9,18 +9,19 @@ const buttonVariants = cva(
         variants: {
             variant: {
                 default:
-                    'bg-paper text-ink border border-line rounded-full shadow-xs hover:border-leaf/60 hover:text-leaf-dark',
+                    'bg-paper text-ink border border-line rounded-lg shadow-xs hover:border-leaf/60 hover:text-leaf-dark',
                 primary:
-                    'bg-leaf text-white rounded-full shadow-xs hover:brightness-105 border border-leaf',
-                ghost: 'rounded-full text-ink hover:bg-paper-2',
-                danger: 'bg-paper text-danger border border-danger/40 rounded-full hover:bg-danger-soft',
-                'ghost-danger': 'rounded-full text-danger hover:bg-danger-soft',
+                    'bg-leaf text-white rounded-lg shadow-xs hover:brightness-105 border border-leaf',
+                ghost: 'rounded-lg text-ink hover:bg-paper-2',
+                danger: 'bg-paper text-danger border border-danger/40 rounded-lg hover:bg-danger-soft',
+                'ghost-danger': 'rounded-lg text-danger hover:bg-danger-soft',
             },
             size: {
                 default: 'h-9 px-4 text-sm',
                 sm: 'h-7 px-2.5 text-xs',
                 lg: 'h-11 px-6 text-base',
                 icon: 'h-9 w-9 text-base',
+                'icon-sm': 'h-7 w-7',
             },
         },
         defaultVariants: { variant: 'default', size: 'default' },

@@ -206,11 +206,11 @@ type s3DirFile struct {
 	read bool
 }
 
-func (f *s3DirFile) Close() error                 { return nil }
-func (f *s3DirFile) Read([]byte) (int, error)     { return 0, errPerm }
-func (f *s3DirFile) Write([]byte) (int, error)    { return 0, errPerm }
+func (f *s3DirFile) Close() error                   { return nil }
+func (f *s3DirFile) Read([]byte) (int, error)       { return 0, errPerm }
+func (f *s3DirFile) Write([]byte) (int, error)      { return 0, errPerm }
 func (f *s3DirFile) Seek(int64, int) (int64, error) { return 0, errPerm }
-func (f *s3DirFile) Stat() (os.FileInfo, error)   { return f.info, nil }
+func (f *s3DirFile) Stat() (os.FileInfo, error)     { return f.info, nil }
 
 func (f *s3DirFile) Readdir(count int) ([]fs.FileInfo, error) {
 	if f.read {
@@ -236,12 +236,12 @@ type s3ReadFile struct {
 	info os.FileInfo
 }
 
-func (f *s3ReadFile) Close() error                 { return f.obj.Close() }
-func (f *s3ReadFile) Read(p []byte) (int, error)   { return f.obj.Read(p) }
+func (f *s3ReadFile) Close() error                       { return f.obj.Close() }
+func (f *s3ReadFile) Read(p []byte) (int, error)         { return f.obj.Read(p) }
 func (f *s3ReadFile) Seek(o int64, w int) (int64, error) { return f.obj.Seek(o, w) }
-func (f *s3ReadFile) Write([]byte) (int, error)    { return 0, errPerm }
+func (f *s3ReadFile) Write([]byte) (int, error)          { return 0, errPerm }
 func (f *s3ReadFile) Readdir(int) ([]fs.FileInfo, error) { return nil, errPerm }
-func (f *s3ReadFile) Stat() (os.FileInfo, error)   { return f.info, nil }
+func (f *s3ReadFile) Stat() (os.FileInfo, error)         { return f.info, nil }
 
 // ---- S3 写文件:pipe 流式中转,Close 时等待上传完成 ----
 
@@ -275,8 +275,8 @@ func (f *s3WriteFile) Close() error {
 	return <-f.done
 }
 
-func (f *s3WriteFile) Read([]byte) (int, error)          { return 0, errPerm }
-func (f *s3WriteFile) Seek(int64, int) (int64, error)    { return 0, errPerm }
+func (f *s3WriteFile) Read([]byte) (int, error)           { return 0, errPerm }
+func (f *s3WriteFile) Seek(int64, int) (int64, error)     { return 0, errPerm }
 func (f *s3WriteFile) Readdir(int) ([]fs.FileInfo, error) { return nil, errPerm }
 func (f *s3WriteFile) Stat() (os.FileInfo, error) {
 	return entryInfo{Entry{Name: path.Base(f.rel), Size: f.n}}, nil

@@ -20,6 +20,7 @@ import { api } from '../api';
 import type { Profile } from '../api';
 import { Button } from './ui/button';
 import SearchBox from './SearchBox';
+import Avatar from './Avatar';
 import { applyTheme, getTheme } from '../theme';
 import type { Theme } from '../theme';
 import { cn } from '../lib/utils';
@@ -92,7 +93,7 @@ export default function Layout({
                 <NavList onNavigate={() => setMobileOpen(false)} />
             </div>
             <div className="pt-3 border-t border-line/70 flex items-center gap-2 px-2">
-                <span className="text-xl">{profile.avatar}</span>
+                <Avatar profile={profile} size="sm" />
                 <span className="flex-1 text-sm font-bold truncate">{profile.user}</span>
                 <Button variant="ghost" size="sm" onClick={logout} aria-label="退出登录">
                     <LogOut className="size-3.5" /> 退出

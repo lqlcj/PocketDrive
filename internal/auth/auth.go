@@ -36,6 +36,9 @@ type Service struct {
 	db     *gorm.DB
 	user   string
 	secret []byte
+	// configDir 存放自定义头像。刻意放在网盘目录之外:否则头像会出现
+	// 在文件列表和 WebDAV 里,还会被整盘备份带走
+	configDir string
 
 	mu sync.Mutex
 	// 成功过的 Basic 凭据摘要缓存:WebDAV 客户端每个请求都带 Basic,
@@ -44,10 +47,11 @@ type Service struct {
 	limiter   map[string]*ipEntry
 }
 
-func New(gdb *gorm.DB, user, initialPass string) (*Service, error) {
+func New(gdb *gorm.DB, user, initialPass, configDir string) (*Service, error) {
 	s := &Service{
 		db:        gdb,
 		user:      user,
+		configDir: configDir,
 		passCache: make(map[[32]byte]struct{}),
 		limiter:   make(map[string]*ipEntry),
 	}
@@ -350,7 +354,7 @@ func (s *Service) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "token": tok, "user": s.User(), "avatar": s.Avatar()})
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "token": tok, "user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
 }
 
 func (s *Service) HandleLogout(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +370,7 @@ func (s *Service) HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) HandleMe(w http.ResponseWriter, r *http.Request) {
-	httpx.JSON(w, http.StatusOK, map[string]any{"user": s.User(), "avatar": s.Avatar()})
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
 }
 
 // HandleProfile updates username and/or avatar. Username change also
@@ -405,7 +409,7 @@ func (s *Service) HandleProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "user": s.User(), "avatar": s.Avatar()})
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
 }
 
 func (s *Service) HandleChangePassword(w http.ResponseWriter, r *http.Request) {

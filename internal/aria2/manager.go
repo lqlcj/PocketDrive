@@ -17,6 +17,7 @@ import (
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
 )
+
 // Manager keeps aria2 task state mirrored in SQLite so history survives
 // aria2 restarts, and handles the magnet metadata → real-download gid
 // migration (followedBy).
@@ -31,8 +32,31 @@ type Manager struct {
 	mu     sync.Mutex
 	speeds map[string]int64
 
+	verMu   sync.Mutex
+	version string
+	verAt   time.Time
+
 	stop chan struct{}
 }
+
+// Version 返回 aria2 版本号(缓存 10 分钟);不可达时返回空串。
+// aria2 跑在 sidecar 容器里,升级靠 docker compose pull,这里只做展示。
+func (m *Manager) Version() string {
+	m.verMu.Lock()
+	defer m.verMu.Unlock()
+	if m.version != "" && time.Since(m.verAt) < 10*time.Minute {
+		return m.version
+	}
+	v, err := m.c.GetVersion()
+	if err != nil {
+		return ""
+	}
+	m.version, m.verAt = v, time.Now()
+	return v
+}
+
+// Degraded 报告 aria2 当前是否不可达。
+func (m *Manager) Degraded() bool { return m.degraded.Load() }
 
 func NewManager(gdb *gorm.DB, c *Client, dataRoot string) *Manager {
 	return &Manager{

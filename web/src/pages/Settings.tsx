@@ -1,30 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import {
-    ChevronRight,
-    Clock,
-    Cloud,
-    HardDrive,
-    KeyRound,
-    Radio,
-    UserRound,
-    Wrench,
-} from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { DiskInfo, Profile, RecentFile } from '../api';
+import type { ComponentInfo, DiskInfo, MountUsage, Profile, RecentFile } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import { Badge, Progress } from '../components/ui/progress';
 import KindIcon from '../components/KindIcon';
+import Avatar from '../components/Avatar';
 import { fileKind, formatBytes, formatTime } from '../util';
-import { cn } from '../lib/utils';
-
-// 两排头像:上排动物,下排植物
-const AVATAR_ANIMALS = ['🦝', '🦊', '🐱', '🐶', '🐸', '🦉', '🐰', '🐼'];
-const AVATAR_PLANTS = ['🌻', '🌵', '🍄', '🌿', '🌸', '🍁', '🌳', '🍑'];
 
 export default function Settings({
     profile,
@@ -34,7 +22,6 @@ export default function Settings({
     onProfile: (p: Profile) => void;
 }) {
     const [username, setUsername] = useState(profile.user);
-    const [avatar, setAvatar] = useState(profile.avatar);
 
     const [oldPass, setOldPass] = useState('');
     const [newPass, setNewPass] = useState('');
@@ -43,33 +30,45 @@ export default function Settings({
 
     const [disk, setDisk] = useState<DiskInfo | null>(null);
     const [recent, setRecent] = useState<RecentFile[]>([]);
+    const [mounts, setMounts] = useState<MountUsage[]>([]);
 
-    const [aria2OK, setAria2OK] = useState<boolean | null>(null);
-    const [ytOK, setYtOK] = useState<boolean | null>(null);
-    const [ytVer, setYtVer] = useState('');
-    const [updating, setUpdating] = useState(false);
-    const [updateOut, setUpdateOut] = useState('');
+    const [comps, setComps] = useState<ComponentInfo[] | null>(null);
+    const [installing, setInstalling] = useState('');
 
-    useEffect(() => {
+    // 头像:上传图片存在配置目录,不进网盘
+    const avatarInput = useRef<HTMLInputElement>(null);
+    const [avatarBusy, setAvatarBusy] = useState(false);
+
+    // 导入会覆盖现有网盘,要二次确认并验密码
+    const importInput = useRef<HTMLInputElement>(null);
+    const [importFile, setImportFile] = useState<File | null>(null);
+    const [importPass, setImportPass] = useState('');
+    const [importing, setImporting] = useState(false);
+
+    const loadComponents = useCallback(() => {
+        api.components()
+            .then((r) => setComps(r.components))
+            .catch(() => undefined);
+    }, []);
+
+    const loadStorage = useCallback(() => {
         api.storage()
             .then((r) => {
                 setDisk(r.disk);
                 setRecent(r.recent ?? []);
+                setMounts(r.mounts ?? []);
             })
             .catch(() => undefined);
-        api.downloads().then((r) => setAria2OK(!r.degraded)).catch(() => setAria2OK(false));
-        api.ytdlp()
-            .then((r) => {
-                setYtOK(r.available);
-                setYtVer(r.version);
-            })
-            .catch(() => setYtOK(false));
     }, []);
+
+    useEffect(() => {
+        loadStorage();
+        loadComponents();
+    }, [loadStorage, loadComponents]);
 
     // 资料 + 密码一个按钮保存:改了哪部分就提交哪部分
     const save = async () => {
-        const profileChanged =
-            username.trim() !== profile.user || avatar !== profile.avatar;
+        const profileChanged = username.trim() !== profile.user;
         const wantPass = oldPass !== '' || newPass !== '' || confirm !== '';
         if (wantPass) {
             if (!oldPass || !newPass) {
@@ -88,8 +87,8 @@ export default function Settings({
         setSaving(true);
         try {
             if (profileChanged) {
-                const r = await api.updateProfile(username.trim(), avatar);
-                onProfile({ user: r.user, avatar: r.avatar });
+                const r = await api.updateProfile(username.trim(), '');
+                onProfile({ ...profile, user: r.user });
             }
             if (wantPass) {
                 await api.changePassword(oldPass, newPass);
@@ -109,19 +108,62 @@ export default function Settings({
         }
     };
 
-    const updateYtdlp = async () => {
-        setUpdating(true);
-        setUpdateOut('');
+    const onAvatarPick = async (file: File | undefined) => {
+        if (!file) return;
+        setAvatarBusy(true);
         try {
-            const r = await api.updateYtdlp();
-            setUpdateOut(r.output);
-            (r.ok ? toast.success : toast.warning)(
-                r.ok ? '更新命令已执行' : '更新命令返回了错误,见输出',
+            const r = await api.uploadAvatar(file);
+            onProfile({ ...profile, hasAvatar: true, avatarVersion: r.version });
+            toast.success('头像已更新');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '头像上传失败');
+        } finally {
+            setAvatarBusy(false);
+            if (avatarInput.current) avatarInput.current.value = '';
+        }
+    };
+
+    const removeAvatar = async () => {
+        setAvatarBusy(true);
+        try {
+            await api.deleteAvatar();
+            onProfile({ ...profile, hasAvatar: false, avatarVersion: '' });
+            toast.success('已恢复为首字母头像');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '删除失败');
+        } finally {
+            setAvatarBusy(false);
+        }
+    };
+
+    const installComponent = async (kind: string, title: string) => {
+        setInstalling(kind);
+        try {
+            const r = await api.installComponent(kind);
+            toast.success(
+                `${title} 已更新到 ${r.version || '最新版'}` +
+                    (r.restarted ? '(已重启生效)' : ''),
             );
+            loadComponents();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '更新失败');
         } finally {
-            setUpdating(false);
+            setInstalling('');
+        }
+    };
+
+    const doImport = async () => {
+        if (!importFile) return;
+        setImporting(true);
+        try {
+            const r = await api.importBackup(importFile, importPass);
+            toast.success(`已恢复 ${r.files} 个文件`, { description: r.note, duration: 10000 });
+            setImportFile(null);
+            setImportPass('');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '导入失败');
+        } finally {
+            setImporting(false);
         }
     };
 
@@ -134,117 +176,106 @@ export default function Settings({
         </div>
     );
 
-    const avatarRow = (list: string[]) => (
-        <div className="grid grid-cols-8 gap-1.5">
-            {list.map((a) => (
-                <button
-                    key={a}
-                    className={cn(
-                        'text-xl rounded-xl py-1.5 cursor-pointer border transition-colors',
-                        a === avatar
-                            ? 'border-leaf bg-leaf-soft'
-                            : 'border-transparent bg-paper-2 hover:border-line',
-                    )}
-                    onClick={() => setAvatar(a)}
-                >
-                    {a}
-                </button>
-            ))}
-        </div>
-    );
-
     return (
         <div>
             <h2 className="text-xl font-extrabold mb-4">设置</h2>
 
-            <div className="grid md:grid-cols-2 gap-4 items-start">
-                {/* 个人资料 + 修改密码:一个按钮统一保存 */}
-                <Card>
-                    <CardTitle>
-                        <UserRound className="size-4 text-leaf-dark" /> 个人资料
-                    </CardTitle>
-                    <div className="flex flex-col gap-1.5">
-                        {avatarRow(AVATAR_ANIMALS)}
-                        {avatarRow(AVATAR_PLANTS)}
-                    </div>
-                    <div className="flex flex-col gap-2.5 mt-3">
-                        <Input
-                            placeholder="用户名(2-32 字符)"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                        />
-                    </div>
-
-                    <div className="border-t border-line/70 mt-4 pt-4">
-                        <div className="font-bold text-sm mb-2.5 flex items-center gap-1.5">
-                            <KeyRound className="size-3.5 text-leaf-dark" /> 修改密码
-                            <span className="text-xs text-ink-soft font-normal">
-                                (不改密码就留空)
-                            </span>
-                        </div>
-                        <div className="flex flex-col gap-2.5">
-                            <Input
-                                type="password"
-                                placeholder="当前密码"
-                                value={oldPass}
-                                autoComplete="current-password"
-                                onChange={(e) => setOldPass(e.target.value)}
-                            />
-                            <Input
-                                type="password"
-                                placeholder="新密码(至少 6 位)"
-                                value={newPass}
-                                autoComplete="new-password"
-                                onChange={(e) => setNewPass(e.target.value)}
-                            />
-                            <Input
-                                type="password"
-                                placeholder="确认新密码"
-                                value={confirm}
-                                autoComplete="new-password"
-                                onChange={(e) => setConfirm(e.target.value)}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5 mt-4">
-                        <Button variant="primary" disabled={saving} onClick={save}>
-                            {saving ? '保存中…' : '保存'}
-                        </Button>
-                        <p className="text-xs text-ink-soft">
-                            改用户名/密码后,WebDAV 的登录信息同步变化,手机端记得更新
-                        </p>
-                    </div>
-                </Card>
-
-                <div className="flex flex-col gap-4">
-                    {/* 仓库容量(从主页迁来) */}
+            {/* 两列各自成流:卡片高度悬殊时不会互相拉出空洞 */}
+            <div className="grid md:grid-cols-2 gap-3 items-start">
+                {/* 左列:账户 */}
+                <div className="flex flex-col gap-3">
+                    {/* 个人资料 + 修改密码:一个按钮统一保存 */}
                     <Card>
-                        <CardTitle>
-                            <HardDrive className="size-4 text-leaf-dark" /> 仓库容量
-                        </CardTitle>
-                        {disk ? (
-                            <>
-                                <Progress percent={disk.usedPercent} />
-                                <p className="text-sm text-ink-soft mt-2">
-                                    已用 {formatBytes(disk.used)} / 共 {formatBytes(disk.total)}
-                                    ,剩余 {formatBytes(disk.free)}
+                        <CardTitle>个人资料</CardTitle>
+                        <div className="flex items-center gap-3">
+                            <Avatar profile={profile} size="lg" />
+                            <div className="flex-1 min-w-0">
+                                <input
+                                    ref={avatarInput}
+                                    type="file"
+                                    accept="image/*"
+                                    hidden
+                                    onChange={(e) => onAvatarPick(e.target.files?.[0])}
+                                />
+                                <div className="flex gap-2 flex-wrap">
+                                    <Button
+                                        size="sm"
+                                        disabled={avatarBusy}
+                                        onClick={() => avatarInput.current?.click()}
+                                    >
+                                        {avatarBusy ? '处理中…' : '上传头像'}
+                                    </Button>
+                                    {profile.hasAvatar && (
+                                        <Button
+                                            size="sm"
+                                            variant="ghost-danger"
+                                            disabled={avatarBusy}
+                                            onClick={removeAvatar}
+                                        >
+                                            移除
+                                        </Button>
+                                    )}
+                                </div>
+                                <p className="text-xs text-ink-soft mt-1.5">
+                                    会裁成正方形缩到 256px。不上传就用用户名首字母。
+                                    头像存在配置目录,不会出现在网盘和 WebDAV 里
                                 </p>
-                            </>
-                        ) : (
-                            <p className="text-sm text-ink-soft">读取中…</p>
-                        )}
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-2.5 mt-3">
+                            <Input
+                                placeholder="用户名(2-32 字符)"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="border-t border-line/70 mt-4 pt-4">
+                            <div className="font-bold text-sm mb-2.5">
+                                修改密码
+                                <span className="text-xs text-ink-soft font-normal ml-1.5">
+                                    (不改密码就留空)
+                                </span>
+                            </div>
+                            <div className="flex flex-col gap-2.5">
+                                <Input
+                                    type="password"
+                                    placeholder="当前密码"
+                                    value={oldPass}
+                                    autoComplete="current-password"
+                                    onChange={(e) => setOldPass(e.target.value)}
+                                />
+                                <Input
+                                    type="password"
+                                    placeholder="新密码(至少 6 位)"
+                                    value={newPass}
+                                    autoComplete="new-password"
+                                    onChange={(e) => setNewPass(e.target.value)}
+                                />
+                                <Input
+                                    type="password"
+                                    placeholder="确认新密码"
+                                    value={confirm}
+                                    autoComplete="new-password"
+                                    onChange={(e) => setConfirm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1.5 mt-4">
+                            <Button variant="primary" disabled={saving} onClick={save}>
+                                {saving ? '保存中…' : '保存'}
+                            </Button>
+                            <p className="text-xs text-ink-soft">
+                                改用户名/密码后,WebDAV 的登录信息同步变化,手机端记得更新
+                            </p>
+                        </div>
                     </Card>
 
-                    {/* 新鲜事(从主页迁来) */}
                     <Card>
-                        <CardTitle>
-                            <Clock className="size-4 text-leaf-dark" /> 新鲜事
-                        </CardTitle>
+                        <CardTitle>最近修改</CardTitle>
                         {recent.length === 0 ? (
-                            <p className="text-sm text-ink-soft">
-                                网盘还空空的,去「我的文件」传点东西吧
-                            </p>
+                            <p className="text-sm text-ink-soft">暂无最近修改的文件</p>
                         ) : (
                             <div className="flex flex-col gap-1.5">
                                 {recent.map((f) => (
@@ -255,7 +286,7 @@ export default function Settings({
                                                 ? f.path.slice(0, f.path.lastIndexOf('/'))
                                                 : ''
                                         }`}
-                                        className="flex items-center gap-2 text-sm hover:bg-paper-2 rounded-xl px-2 py-1 -mx-2"
+                                        className="flex items-center gap-2 text-sm hover:bg-paper-2 rounded-lg px-2 py-1 -mx-2"
                                     >
                                         <KindIcon kind={fileKind(f.name)} />
                                         <span className="flex-1 min-w-0 truncate font-bold">
@@ -271,72 +302,202 @@ export default function Settings({
                     </Card>
                 </div>
 
-                {/* 存储策略入口 */}
-                <Link to="/storage" className="block">
-                    <Card className="hover:border-leaf/50 transition-colors">
-                        <div className="flex items-center gap-3">
-                            <Cloud className="size-5 text-leaf-dark shrink-0" />
-                            <div className="flex-1 min-w-0">
-                                <div className="font-extrabold text-base">存储策略</div>
-                                <div className="text-xs text-ink-soft mt-0.5">
-                                    挂载 Cloudflare R2 / S3 兼容对象存储,显示为 @名称
-                                    文件夹,网页与 WebDAV 通用
-                                </div>
+                {/* 右列:存储与组件 */}
+                <div className="flex flex-col gap-3">
+                    <Card>
+                        <CardTitle>仓库容量</CardTitle>
+                        {disk ? (
+                            <>
+                                <div className="text-xs font-bold mb-1">本机存储</div>
+                                <Progress percent={disk.usedPercent} />
+                                <p className="text-sm text-ink-soft mt-1.5">
+                                    已用 {formatBytes(disk.used)} / 共 {formatBytes(disk.total)}
+                                    ,剩余 {formatBytes(disk.free)}
+                                </p>
+                            </>
+                        ) : (
+                            <p className="text-sm text-ink-soft">读取中…</p>
+                        )}
+
+                        {/* 挂载的外部存储各自一行;用量是后台统计的缓存值 */}
+                        {mounts.map((m) => (
+                            <div key={m.name} className="mt-3 pt-3 border-t border-line/70">
+                                <div className="text-xs font-bold mb-1">@{m.name}</div>
+                                {m.pending ? (
+                                    <p className="text-sm text-ink-soft">统计中…</p>
+                                ) : m.quota > 0 ? (
+                                    <>
+                                        <Progress percent={(m.bytes / m.quota) * 100} />
+                                        <p className="text-sm text-ink-soft mt-1.5">
+                                            已用 {formatBytes(m.bytes)} / 上限{' '}
+                                            {formatBytes(m.quota)}
+                                            {m.files > 0 && `,${m.files} 个文件`}
+                                        </p>
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-ink-soft">
+                                        已用 {formatBytes(m.bytes)}
+                                        {m.files > 0 && `,${m.files} 个文件`}
+                                        <span className="text-xs">(未设上限)</span>
+                                    </p>
+                                )}
                             </div>
-                            <ChevronRight className="size-4 text-ink-soft shrink-0" />
-                        </div>
+                        ))}
                     </Card>
-                </Link>
 
-                <Card>
-                    <CardTitle>
-                        <Radio className="size-4 text-leaf-dark" /> WebDAV
-                    </CardTitle>
-                    <p className="text-sm text-ink-soft mb-2">
-                        手机播放器/文件管理器里添加 WebDAV 服务,即可直连整个网盘
-                        (含 @外部存储挂载):
-                    </p>
-                    {kv('地址', <code className="bg-paper-2 rounded-lg px-2 py-0.5 break-all">{davURL}</code>)}
-                    {kv('用户名', <code className="bg-paper-2 rounded-lg px-2 py-0.5">{profile.user}</code>)}
-                    {kv('密码', <span className="text-sm">与网页登录密码相同</span>)}
-                </Card>
+                    <Link to="/storage" className="block">
+                        <Card className="hover:border-leaf/50 transition-colors">
+                            <div className="flex items-center gap-3">
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-bold text-[15px]">存储策略</div>
+                                    <div className="text-xs text-ink-soft mt-0.5">
+                                        挂载 Cloudflare R2 / S3 兼容对象存储,显示为 @名称
+                                        文件夹,网页与 WebDAV 通用
+                                    </div>
+                                </div>
+                                <ChevronRight className="size-4 text-ink-soft shrink-0" />
+                            </div>
+                        </Card>
+                    </Link>
 
-                <Card>
-                    <CardTitle>
-                        <Wrench className="size-4 text-leaf-dark" /> 组件状态
-                    </CardTitle>
-                    {kv(
-                        'aria2(离线下载)',
-                        aria2OK === null ? (
-                            '…'
-                        ) : aria2OK ? (
-                            <Badge tone="green">已连接</Badge>
+                    <Card>
+                        <CardTitle>WebDAV</CardTitle>
+                        <p className="text-sm text-ink-soft mb-2">
+                            手机播放器/文件管理器里添加 WebDAV 服务,即可直连整个网盘
+                            (含 @外部存储挂载):
+                        </p>
+                        {kv('地址', <code className="bg-paper-2 rounded px-2 py-0.5 break-all">{davURL}</code>)}
+                        {kv('用户名', <code className="bg-paper-2 rounded px-2 py-0.5">{profile.user}</code>)}
+                        {kv('密码', <span className="text-sm">与网页登录密码相同</span>)}
+                    </Card>
+
+                    <Card>
+                        <CardTitle>备份与迁移</CardTitle>
+                        <p className="text-sm text-ink-soft mb-2.5">
+                            导出会把网盘文件和配置库(分享链接、下载历史、文件夹图标、
+                            存储策略)打成一个 tar.gz。换 VPS 时在新机器上导入即可。
+                            外部存储(@挂载)的内容不打包,导入后按原策略自动挂上。
+                        </p>
+                        <div className="flex gap-2 flex-wrap">
+                            <a href={api.exportUrl()} download>
+                                <Button size="sm">导出整盘备份</Button>
+                            </a>
+                            <input
+                                ref={importInput}
+                                type="file"
+                                accept=".gz,.tgz"
+                                hidden
+                                onChange={(e) => {
+                                    const f = e.target.files?.[0];
+                                    if (f) setImportFile(f);
+                                    e.target.value = '';
+                                }}
+                            />
+                            <Button size="sm" onClick={() => importInput.current?.click()}>
+                                从备份导入…
+                            </Button>
+                        </div>
+                        <p className="text-xs text-ink-soft mt-2">
+                            备份包里含存储策略的密钥,请妥善保管
+                        </p>
+                    </Card>
+
+                    <Card>
+                        <CardTitle>组件状态</CardTitle>
+                        {comps === null ? (
+                            <p className="text-sm text-ink-soft">读取中…</p>
                         ) : (
-                            <Badge tone="red">不可达</Badge>
-                        ),
-                    )}
-                    {kv(
-                        'yt-dlp(yt下载)',
-                        ytOK === null ? (
-                            '…'
-                        ) : ytOK ? (
-                            <Badge tone="green">{ytVer || '可用'}</Badge>
-                        ) : (
-                            <Badge tone="red">不可用</Badge>
-                        ),
-                    )}
-                    <div className="mt-2.5">
-                        <Button size="sm" disabled={updating || !ytOK} onClick={updateYtdlp}>
-                            {updating ? '更新中…' : '更新 yt-dlp'}
-                        </Button>
-                    </div>
-                    {updateOut && (
-                        <pre className="mt-2 max-h-40 overflow-auto bg-paper-2 rounded-xl p-2.5 text-[11px] whitespace-pre-wrap break-all">
-                            {updateOut}
-                        </pre>
-                    )}
-                </Card>
+                            <div className="flex flex-col gap-2.5">
+                                {comps.map((c) => (
+                                    <div
+                                        key={c.kind}
+                                        className="flex items-center gap-2 flex-wrap"
+                                    >
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-bold flex items-center gap-1.5 flex-wrap">
+                                                {c.title}
+                                                {!c.installed ? (
+                                                    <Badge tone="red">未安装</Badge>
+                                                ) : !c.running ? (
+                                                    <Badge tone="red">未运行</Badge>
+                                                ) : c.outdated ? (
+                                                    <Badge tone="orange">
+                                                        有新版 {c.latest}
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge tone="green">{c.version}</Badge>
+                                                )}
+                                            </div>
+                                            <div className="text-xs text-ink-soft">
+                                                {c.note}
+                                                {c.installed && c.outdated && (
+                                                    <> · 当前 {c.version}</>
+                                                )}
+                                                {c.lastUpdated && (
+                                                    <> · 上次更新 {formatTime(c.lastUpdated)}</>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {c.managed && (
+                                            <Button
+                                                size="sm"
+                                                variant={c.outdated || !c.installed ? 'primary' : 'default'}
+                                                disabled={installing !== ''}
+                                                onClick={() => installComponent(c.kind, c.title)}
+                                            >
+                                                {installing === c.kind
+                                                    ? '下载中…'
+                                                    : !c.installed
+                                                      ? '安装'
+                                                      : c.outdated
+                                                        ? '升级'
+                                                        : '重新下载'}
+                                            </Button>
+                                        )}
+                                    </div>
+                                ))}
+                                <p className="text-xs text-ink-soft leading-relaxed">
+                                    {comps.some((c) => c.managed) ? (
+                                        <>
+                                            三个组件都装在 config 卷里,升级结果跨容器重启保留,
+                                            不需要在服务器上敲任何命令。aria2 升级后会自动重启生效
+                                        </>
+                                    ) : (
+                                        <>
+                                            当前以非托管方式运行(本机开发),组件版本取决于你系统
+                                            PATH 里的安装
+                                        </>
+                                    )}
+                                </p>
+                            </div>
+                        )}
+                    </Card>
+                </div>
             </div>
+
+            {/* 导入确认:会覆盖现有网盘,所以要验密码 */}
+            <Dialog open={importFile !== null} onOpenChange={(o) => !o && setImportFile(null)}>
+                <DialogContent title="从备份导入">
+                    <p className="text-sm mb-3">
+                        将从「{importFile?.name}」恢复。
+                        <b>同名文件会被覆盖</b>
+                        ,配置库会在重启后整个替换掉现在的。建议先导出一份当前备份。
+                    </p>
+                    <Input
+                        type="password"
+                        placeholder="输入当前登录密码以确认"
+                        value={importPass}
+                        autoComplete="current-password"
+                        onChange={(e) => setImportPass(e.target.value)}
+                    />
+                    <DialogFooter
+                        okText={importing ? '导入中…' : '确认导入'}
+                        okDanger
+                        okLoading={importing}
+                        onOk={doImport}
+                    />
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

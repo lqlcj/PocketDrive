@@ -44,12 +44,12 @@ func testSvc(t *testing.T) (*Service, *cloud.Service) {
 		t.Fatalf("create policy: %v", err)
 	}
 	cs := cloud.New(gdb)
-	fs, err := files.New(filepath.Join(tmp, "data"), filepath.Join(tmp, "uploads"), cs)
+	fs, err := files.New(filepath.Join(tmp, "data"), filepath.Join(tmp, "uploads"), cs, gdb)
 	if err != nil {
 		t.Fatalf("files.New: %v", err)
 	}
 	t.Cleanup(func() { fs.Root().Close() })
-	return New(gdb, fs, thumbs.New(fs, filepath.Join(tmp, "thumbs")), cs), cs
+	return New(gdb, fs, thumbs.New(fs, filepath.Join(tmp, "thumbs"), nil), cs), cs
 }
 
 func TestE2ECloudShare(t *testing.T) {

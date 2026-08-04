@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Folder, Globe, Magnet, Settings2 } from 'lucide-react';
+import { ArrowLeft, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { DownloadSettings as DS } from '../api';
@@ -91,9 +91,7 @@ export default function DownloadSettings() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-xl font-extrabold flex items-center gap-2">
-                    <Settings2 className="size-5 text-leaf-dark" /> 下载设置
-                </h2>
+                <h2 className="text-xl font-extrabold">下载设置</h2>
                 <Link to="/downloads" className="ml-auto">
                     <Button size="sm">
                         <ArrowLeft className="size-3.5" /> 返回下载
@@ -102,10 +100,7 @@ export default function DownloadSettings() {
             </div>
 
             <Card>
-                <CardTitle>
-                    <Globe className="size-4 text-leaf-dark" />
-                    全局(保存后即时生效,无需重启 aria2)
-                </CardTitle>
+                <CardTitle>全局(保存后即时生效,无需重启 aria2)</CardTitle>
                 {row(
                     '最大同时下载数',
                     <NativeSelect
@@ -150,10 +145,7 @@ export default function DownloadSettings() {
             </Card>
 
             <Card className="mt-4">
-                <CardTitle>
-                    <Magnet className="size-4 text-leaf-dark" />
-                    BT 任务(对新添加的任务生效)
-                </CardTitle>
+                <CardTitle>BT 任务(对新添加的任务生效)</CardTitle>
                 {row(
                     '做种策略',
                     <NativeSelect
@@ -191,9 +183,7 @@ export default function DownloadSettings() {
             </Card>
 
             <Card className="mt-4">
-                <CardTitle>
-                    <Folder className="size-4 text-leaf-dark" /> 默认下载目录
-                </CardTitle>
+                <CardTitle>默认下载目录</CardTitle>
                 <div className="flex items-center gap-2 flex-wrap">
                     <span className="bg-paper-2 rounded-full px-3.5 py-1.5 text-sm inline-flex items-center gap-1.5">
                         <Folder className="size-3.5 text-ink-soft" />

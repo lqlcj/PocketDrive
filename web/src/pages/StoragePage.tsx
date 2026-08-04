@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, Cloud, HardDrive, Plug, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
+import { formatBytes } from '../util';
 import type { StoragePolicy, StoragePolicyInput } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -18,6 +19,7 @@ const EMPTY: StoragePolicyInput = {
     accessKey: '',
     secretKey: '',
     basePath: '',
+    quotaGB: 0,
 };
 
 /**
@@ -59,6 +61,7 @@ export default function StoragePage() {
             accessKey: p.accessKey,
             secretKey: '',
             basePath: p.basePath,
+            quotaGB: p.quotaBytes > 0 ? p.quotaBytes / 1024 ** 3 : 0,
         });
         setEditingId(p.id);
         setEditOpen(true);
@@ -123,9 +126,7 @@ export default function StoragePage() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4 flex-wrap">
-                <h2 className="text-xl font-extrabold flex items-center gap-2">
-                    <Cloud className="size-5 text-leaf-dark" /> 存储策略
-                </h2>
+                <h2 className="text-xl font-extrabold">存储策略</h2>
                 <div className="ml-auto flex gap-2">
                     <Link to="/settings">
                         <Button size="sm">
@@ -155,8 +156,8 @@ export default function StoragePage() {
                 <Card className="text-center text-ink-soft py-10 text-sm">加载中…</Card>
             ) : policies.length === 0 ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">
-                    还没有外部存储。点右上角「添加 S3/R2 存储」,把你的 Cloudflare R2
-                    免费 10G 挂进来吧
+                    还没有外部存储。点右上角「添加 S3/R2 存储」接入 Cloudflare R2、
+                    AWS S3 或其他 S3 兼容服务
                 </Card>
             ) : (
                 <div className="flex flex-col gap-3">
@@ -176,6 +177,26 @@ export default function StoragePage() {
                                     <div className="text-xs text-ink-soft truncate">
                                         {p.endpoint}
                                     </div>
+                                    {p.connected && (
+                                        <div className="text-xs text-ink-soft mt-0.5">
+                                            {p.usagePending ? (
+                                                '用量统计中…'
+                                            ) : p.quotaBytes > 0 ? (
+                                                <>
+                                                    已用 {formatBytes(p.usedBytes)} / 上限{' '}
+                                                    {formatBytes(p.quotaBytes)}
+                                                    {p.usedBytes > p.quotaBytes && (
+                                                        <span className="text-danger">
+                                                            {' '}
+                                                            · 已超出
+                                                        </span>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <>已用 {formatBytes(p.usedBytes)} · 未设上限</>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                                 {p.connected ? (
                                     <Badge tone="green">已挂载</Badge>
@@ -246,6 +267,27 @@ export default function StoragePage() {
                             'password',
                         )}
                         {field('桶内路径前缀(可选)', 'basePath', '例如 pocketdrive')}
+                        <div>
+                            <label className="block text-xs font-bold text-ink-soft mb-1">
+                                容量上限(GB,0 或留空表示不限)
+                            </label>
+                            <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={form.quotaGB === 0 ? '' : String(form.quotaGB ?? '')}
+                                placeholder="例如 10"
+                                onChange={(e) =>
+                                    setForm({
+                                        ...form,
+                                        quotaGB: e.target.value === '' ? 0 : Number(e.target.value),
+                                    })
+                                }
+                            />
+                            <p className="text-xs text-ink-soft mt-1">
+                                软限制:用量靠定期统计,刚传上去的文件可能要过一会才算进来
+                            </p>
+                        </div>
                         <div className="flex gap-2 justify-end mt-1">
                             <Button disabled={testing} onClick={test}>
                                 <Plug className="size-3.5" />

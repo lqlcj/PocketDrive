@@ -234,11 +234,11 @@ func (s *Service) HandleInfo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		httpx.JSON(w, http.StatusOK, map[string]any{
-			"name":        e.Name,
-			"size":        e.Size,
-			"mtime":       e.Mtime,
+			"name":         e.Name,
+			"size":         e.Size,
+			"mtime":        e.Mtime,
 			"needPassword": sh.HasPassword,
-			"expiresAt":   sh.ExpiresAt,
+			"expiresAt":    sh.ExpiresAt,
 		})
 		return
 	}
@@ -248,11 +248,11 @@ func (s *Service) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"name":        fi.Name(),
-		"size":        fi.Size(),
-		"mtime":       fi.ModTime().UnixMilli(),
+		"name":         fi.Name(),
+		"size":         fi.Size(),
+		"mtime":        fi.ModTime().UnixMilli(),
 		"needPassword": sh.HasPassword,
-		"expiresAt":   sh.ExpiresAt,
+		"expiresAt":    sh.ExpiresAt,
 	})
 }
 

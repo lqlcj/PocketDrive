@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { TrashItem } from '../api';
@@ -42,9 +41,7 @@ export default function Trash() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-xl font-extrabold flex items-center gap-2">
-                    <Trash2 className="size-5 text-leaf-dark" /> 垃圾桶
-                </h2>
+                <h2 className="text-xl font-extrabold">垃圾桶</h2>
                 <span className="text-sm text-ink-soft">30 天后自动清理</span>
                 {items.length > 0 && (
                     <Button
@@ -62,7 +59,7 @@ export default function Trash() {
                 <Card className="text-center text-ink-soft py-10 text-sm">加载中…</Card>
             ) : items.length === 0 ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">
-                    垃圾桶干干净净
+                    垃圾桶为空
                 </Card>
             ) : (
                 <Card className="p-0 overflow-hidden">

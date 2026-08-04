@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	"gorm.io/gorm"
+
 	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/httpx"
 )
@@ -23,11 +25,10 @@ type Service struct {
 	DataDir string
 	tmpDir  string // 分片上传暂存目录(DB 同级,不在网盘里)
 	cloud   *cloud.Service
-
-	s3ups s3Uploads // 外部存储的分片上传会话
+	db      *gorm.DB // 分片上传会话(断点续传需要跨请求/跨重启存活)
 }
 
-func New(dataDir, tmpDir string, cloudSvc *cloud.Service) (*Service, error) {
+func New(dataDir, tmpDir string, cloudSvc *cloud.Service, gdb *gorm.DB) (*Service, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -38,8 +39,7 @@ func New(dataDir, tmpDir string, cloudSvc *cloud.Service) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{root: r, DataDir: dataDir, tmpDir: tmpDir, cloud: cloudSvc,
-		s3ups: newS3Uploads()}, nil
+	return &Service{root: r, DataDir: dataDir, tmpDir: tmpDir, cloud: cloudSvc, db: gdb}, nil
 }
 
 func (s *Service) Root() *os.Root { return s.root }
@@ -248,6 +248,12 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if mnt != nil {
+			// 配额是软限制:统计还没跑过时放行,不会因为算不出用量就堵死上传
+			if err := s.cloud.CheckQuota(mnt.Name, 0); err != nil {
+				part.Close()
+				httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+				return
+			}
 			// 中转直推 S3:size 未知走流式 multipart(8MB 内存缓冲)
 			err = mnt.Put(r.Context(), path.Join(mntRel, name), part, -1)
 			if err != nil {

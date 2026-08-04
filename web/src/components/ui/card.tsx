@@ -5,7 +5,7 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
     return (
         <div
             className={cn(
-                'bg-paper border border-line/70 rounded-[var(--radius-card)] shadow-[var(--shadow-card)] p-4',
+                'bg-paper border border-line/70 rounded-[var(--radius-card)] shadow-[var(--shadow-card)] p-3.5',
                 className,
             )}
             {...props}
@@ -20,7 +20,7 @@ export function CardTitle({
 }: React.HTMLAttributes<HTMLHeadingElement>) {
     return (
         <h3
-            className={cn('font-extrabold text-base mb-3 flex items-center gap-2', className)}
+            className={cn('font-bold text-[15px] mb-2.5 flex items-center gap-2', className)}
             {...props}
         >
             {children}

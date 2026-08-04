@@ -111,6 +111,10 @@ export interface ShareInfo {
 export interface Profile {
     user: string;
     avatar: string;
+    /** 是否上传过自定义头像;没有则前端用用户名首字母 */
+    hasAvatar?: boolean;
+    /** 头像版本号,换头像后用它破缓存 */
+    avatarVersion?: string;
 }
 
 export interface DownloadSettings {
@@ -127,6 +131,44 @@ export interface DiskInfo {
     used: number;
     free: number;
     usedPercent: number;
+}
+
+/** 压缩/解压任务(异步,前端轮询进度) */
+export interface ArchiveTask {
+    id: number;
+    kind: 'compress' | 'extract';
+    status: 'running' | 'done' | 'error';
+    src: string;
+    dest: string;
+    format: string;
+    total: number;
+    done: number;
+    errorMsg: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+/** 外部组件(yt-dlp / aria2 / ffmpeg)的状态,可在网页里各自升级 */
+export interface ComponentInfo {
+    kind: string;
+    title: string;
+    note: string;
+    installed: boolean;
+    version: string;
+    latest: string;
+    outdated: boolean;
+    managed: boolean;
+    running: boolean;
+    lastUpdated: string;
+}
+
+/** 外部存储挂载的用量 */
+export interface MountUsage {
+    name: string;
+    bytes: number;
+    files: number;
+    quota: number;
+    pending: boolean;
 }
 
 export interface RecentFile {
@@ -146,6 +188,12 @@ export interface StoragePolicy {
     accessKey: string;
     basePath: string;
     connected: boolean;
+    /** 容量上限(字节),0 = 不限 */
+    quotaBytes: number;
+    usedBytes: number;
+    usedFiles: number;
+    /** 用量还在后台统计中 */
+    usagePending: boolean;
 }
 
 export interface StoragePolicyInput {
@@ -157,6 +205,8 @@ export interface StoragePolicyInput {
     accessKey: string;
     secretKey: string;
     basePath: string;
+    /** 容量上限(GB),0 或留空 = 不限 */
+    quotaGB?: number;
 }
 
 export const api = {
@@ -218,7 +268,15 @@ export const api = {
     testStorage: (p: Partial<StoragePolicyInput>) =>
         post<{ ok: boolean }>('/api/v1/storages/test', p),
 
-    uploadInit: (path: string) => post<{ id: string }>('/api/v1/files/upload/init', { path }),
+    /**
+     * 开始(或找回)一次分片上传。带上文件大小与修改时间,服务端就能认出
+     * 「同一个文件传到同一个位置」,把已传的分片序号回给我们——断点续传。
+     */
+    uploadInit: (path: string, size: number, lastModified: number, chunkSize: number) =>
+        post<{ id: string; uploaded: number[]; chunkSize: number }>(
+            '/api/v1/files/upload/init',
+            { path, size, lastModified, chunkSize },
+        ),
     uploadChunk: async (id: string, index: number, blob: Blob) => {
         const resp = await fetch(
             `/api/v1/files/upload/chunk?id=${id}&index=${index}`,
@@ -243,7 +301,51 @@ export const api = {
     updateTrackers: () =>
         post<{ ok: boolean; count: number }>('/api/v1/downloads/trackers/update', {}),
 
-    storage: () => req<{ disk: DiskInfo; recent: RecentFile[] | null }>('/api/v1/storage'),
+    storage: () =>
+        req<{ disk: DiskInfo; recent: RecentFile[] | null; mounts: MountUsage[] | null }>(
+            '/api/v1/storage',
+        ),
+
+    components: () =>
+        req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),
+    installComponent: (kind: string) =>
+        post<{ ok: boolean; version: string; restarted: boolean }>(
+            '/api/v1/components/install',
+            { kind },
+        ),
+
+    avatarUrl: (version: string) =>
+        `/api/v1/public/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`,
+    uploadAvatar: async (file: File) => {
+        const resp = await fetch('/api/v1/auth/avatar', { method: 'POST', body: file });
+        const body = await resp.json().catch(() => null);
+        if (!resp.ok) throw new ApiError(resp.status, body?.error ?? '头像上传失败');
+        return body as { ok: boolean; version: string };
+    },
+    deleteAvatar: () => post<{ ok: boolean }>('/api/v1/auth/avatar/delete', {}),
+
+    archiveTasks: () => req<{ tasks: ArchiveTask[] }>('/api/v1/archive'),
+    compress: (paths: string[], dest: string, format: string) =>
+        post<{ ok: boolean; task: ArchiveTask }>('/api/v1/archive/compress', {
+            paths,
+            dest,
+            format,
+        }),
+    extract: (path: string, dest: string) =>
+        post<{ ok: boolean; task: ArchiveTask }>('/api/v1/archive/extract', { path, dest }),
+    deleteArchiveTask: (id: number) => post<{ ok: boolean }>('/api/v1/archive/delete', { id }),
+
+    exportUrl: () => '/api/v1/admin/export',
+    importBackup: async (file: File, password: string) => {
+        const resp = await fetch('/api/v1/admin/import', {
+            method: 'POST',
+            headers: { 'X-PD-Password': password },
+            body: file,
+        });
+        const body = await resp.json().catch(() => null);
+        if (!resp.ok) throw new ApiError(resp.status, body?.error ?? '导入失败');
+        return body as { ok: boolean; files: number; database: boolean; note: string };
+    },
 
     downloads: () =>
         req<{ degraded: boolean; tasks: DownloadTask[] }>('/api/v1/downloads'),
@@ -263,8 +365,6 @@ export const api = {
         post<{ ok: boolean }>('/api/v1/ytdlp', { url, dir, preset, options }),
     cancelYtdlp: (id: number) => post<{ ok: boolean }>('/api/v1/ytdlp/cancel', { id }),
     deleteYtdlp: (id: number) => post<{ ok: boolean }>('/api/v1/ytdlp/delete', { id }),
-    updateYtdlp: () =>
-        post<{ ok: boolean; output: string }>('/api/v1/ytdlp/update', {}),
 
     shares: () => req<{ shares: Share[] }>('/api/v1/shares'),
     createShare: (path: string, password: string, type: string, expiresHours: number) =>
