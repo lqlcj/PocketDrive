@@ -6,7 +6,7 @@ import type { Share } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/progress';
-import { formatTime } from '../util';
+import { formatTime, shareLink } from '../util';
 
 export default function SharesPage() {
     const [shares, setShares] = useState<Share[]>([]);
@@ -20,9 +20,6 @@ export default function SharesPage() {
     }, []);
 
     useEffect(load, [load]);
-
-    const shareLink = (s: Share) =>
-        `${window.location.origin}${s.type === 'direct' ? '/d/' : '/s/'}${s.token}`;
 
     const copyLink = async (s: Share) => {
         try {

@@ -13,7 +13,7 @@ import {
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { FileEntry, Share } from '../api';
-import { fileKind, formatBytes, formatTime } from '../util';
+import { fileKind, formatBytes, formatTime, shareLink } from '../util';
 import Preview from '../components/Preview';
 import FolderPicker from '../components/FolderPicker';
 import FileTree from '../components/FileTree';
@@ -252,9 +252,6 @@ export default function Files() {
             toast.error(e instanceof Error ? e.message : '创建分享失败');
         }
     };
-
-    const shareLink = (s: Share) =>
-        `${window.location.origin}${s.type === 'direct' ? '/d/' : '/s/'}${s.token}`;
 
     const copyText = async (text: string) => {
         try {
@@ -711,8 +708,8 @@ export default function Files() {
                         <div>
                             <p className="text-sm mb-2">
                                 {shareResult.type === 'direct'
-                                    ? '直链已生成,可直接粘贴到播放器/下载工具 🎉'
-                                    : '分享链接已生成 🎉'}
+                                    ? '直链已生成,带真实文件名后缀,可直接粘贴到播放器/下载工具'
+                                    : '分享链接已生成'}
                             </p>
                             <code className="block bg-paper-2 rounded-xl px-3 py-2 text-xs break-all">
                                 {shareLink(shareResult)}

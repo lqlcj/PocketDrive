@@ -46,7 +46,9 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	mux.HandleFunc("GET /api/v1/public/share/{token}", d.Share.HandleInfo)
 	mux.HandleFunc("GET /api/v1/public/share/{token}/download", d.Share.HandleDownload)
 	mux.HandleFunc("GET /api/v1/public/share/{token}/thumb", d.Share.HandleThumb)
+	// 直链两种形式等价:带文件名段的 URL 自带真实后缀,播放器/下载工具按后缀识别
 	mux.HandleFunc("GET /d/{token}", d.Share.HandleDirect)
+	mux.HandleFunc("GET /d/{token}/{name}", d.Share.HandleDirect)
 
 	// authenticated API
 	api := http.NewServeMux()

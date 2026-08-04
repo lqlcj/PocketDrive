@@ -243,8 +243,11 @@ func (s *Service) HandleThumb(w http.ResponseWriter, r *http.Request) {
 	s.thumbs.Serve(w, r, sh.Path)
 }
 
-// HandleDirect serves /d/{token}: raw file stream for direct-link
-// shares — usable by players and download tools, no password.
+// HandleDirect serves /d/{token} and /d/{token}/{name}: raw file
+// stream for direct-link shares — usable by players and download
+// tools, no password. The optional {name} segment only makes the URL
+// carry a real filename + extension (players and download tools pick
+// file type by suffix); the token alone is the credential.
 func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 	sh, err := s.find(r.PathValue("token"))
 	if err != nil || sh.Type != "direct" {
@@ -262,6 +265,10 @@ func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, "文件不可用")
 		return
 	}
+	// inline:浏览器/播放器直接打开;filename 让 wget/IDM 等保存时
+	// 用真实文件名(即使拿到的是不带文件名段的旧格式链接)
+	w.Header().Set("Content-Disposition",
+		"inline; filename*=UTF-8''"+url.PathEscape(fi.Name()))
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 

@@ -70,6 +70,18 @@ export function browserPlayable(name: string): boolean {
     return ['mp4', 'webm', 'm4v', 'mov', 'ogg'].includes(ext);
 }
 
+// 分享链接:直链在 token 后带上真实文件名段(/d/xxx/歌.mp3),
+// 播放器/下载工具靠 URL 后缀识别类型;token 本身仍是唯一凭证
+export function shareLink(s: { token: string; type: string; path: string }): string {
+    if (s.type === 'direct') {
+        const name = s.path.includes('/')
+            ? s.path.slice(s.path.lastIndexOf('/') + 1)
+            : s.path;
+        return `${window.location.origin}/d/${s.token}/${encodeURIComponent(name)}`;
+    }
+    return `${window.location.origin}/s/${s.token}`;
+}
+
 // Office 在线预览支持的格式(纯浏览器端渲染,服务器只出文件流)
 export function officePreviewable(name: string): boolean {
     const ext = name.split('.').pop()?.toLowerCase() ?? '';
