@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Folder, Home } from 'lucide-react';
+import { Cloud, Folder, Home } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import { Dialog, DialogContent, DialogFooter } from './ui/dialog';
@@ -9,6 +9,13 @@ interface Props {
     title?: string;
     /** 初始目录(相对根) */
     initial?: string;
+    /**
+     * 浏览根:''(默认)= 整个网盘;'@R2' = 只能在该挂载内选
+     * (跨存储移动不支持,把选择范围锁在源存储里)。
+     */
+    rootPath?: string;
+    /** 隐藏 @ 挂载点(离线下载/yt下载只能落本机时用) */
+    hideMounts?: boolean;
     onClose: () => void;
     onSelect: (dir: string) => void;
 }
@@ -18,6 +25,8 @@ export default function FolderPicker({
     open,
     title = '选择文件夹',
     initial = '',
+    rootPath = '',
+    hideMounts = false,
     onClose,
     onSelect,
 }: Props) {
@@ -25,23 +34,34 @@ export default function FolderPicker({
     const [dirs, setDirs] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
 
-    const load = useCallback((p: string) => {
-        setLoading(true);
-        api.listFiles(p)
-            .then((r) => {
-                setPath(p);
-                setDirs(r.entries.filter((e) => e.dir).map((e) => e.name));
-            })
-            .catch((e) => toast.error(e instanceof Error ? e.message : '加载失败'))
-            .finally(() => setLoading(false));
-    }, []);
+    const load = useCallback(
+        (p: string) => {
+            setLoading(true);
+            api.listFiles(p)
+                .then((r) => {
+                    setPath(p);
+                    setDirs(
+                        r.entries
+                            .filter((e) => e.dir)
+                            .map((e) => e.name)
+                            .filter((n) => !(hideMounts && p === '' && n.startsWith('@'))),
+                    );
+                })
+                .catch((e) => toast.error(e instanceof Error ? e.message : '加载失败'))
+                .finally(() => setLoading(false));
+        },
+        [hideMounts],
+    );
 
     useEffect(() => {
-        if (open) load(initial);
+        if (open) load(initial || rootPath);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
-    const parts = path === '' ? [] : path.split('/');
+    // 面包屑从浏览根开始(锁定在挂载内时,根就是挂载点)
+    const relToRoot = rootPath === '' ? path : path.slice(rootPath.length).replace(/^\//, '');
+    const parts = relToRoot === '' ? [] : relToRoot.split('/');
+    const isMount = rootPath.startsWith('@');
 
     return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -49,12 +69,21 @@ export default function FolderPicker({
                 <div className="text-sm text-ink-soft break-all mb-2">
                     <button
                         className="text-leaf-dark font-bold cursor-pointer inline-flex items-center gap-1 align-middle"
-                        onClick={() => load('')}
+                        onClick={() => load(rootPath)}
                     >
-                        <Home className="size-3.5" /> 根目录
+                        {isMount ? (
+                            <>
+                                <Cloud className="size-3.5" /> {rootPath}
+                            </>
+                        ) : (
+                            <>
+                                <Home className="size-3.5" /> 根目录
+                            </>
+                        )}
                     </button>
                     {parts.map((seg, i) => {
-                        const p = parts.slice(0, i + 1).join('/');
+                        const p =
+                            (rootPath ? rootPath + '/' : '') + parts.slice(0, i + 1).join('/');
                         return (
                             <span key={p}>
                                 {' / '}
@@ -82,7 +111,11 @@ export default function FolderPicker({
                                 className="flex items-center gap-2 text-left px-3 py-2 rounded-xl hover:bg-paper-2 text-sm cursor-pointer"
                                 onClick={() => load(path === '' ? d : `${path}/${d}`)}
                             >
-                                <Folder className="size-4 text-amber-600 dark:text-amber-400 fill-amber-600/15 shrink-0" />
+                                {d.startsWith('@') && path === '' ? (
+                                    <Cloud className="size-4 text-sky-600 dark:text-sky-400 shrink-0" />
+                                ) : (
+                                    <Folder className="size-4 text-amber-600 dark:text-amber-400 fill-amber-600/15 shrink-0" />
+                                )}
                                 {d}
                             </button>
                         ))

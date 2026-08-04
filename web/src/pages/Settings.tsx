@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
+    ChevronRight,
     Clock,
+    Cloud,
     HardDrive,
     KeyRound,
     Radio,
@@ -33,7 +35,6 @@ export default function Settings({
 }) {
     const [username, setUsername] = useState(profile.user);
     const [avatar, setAvatar] = useState(profile.avatar);
-    const [savingProfile, setSavingProfile] = useState(false);
 
     const [oldPass, setOldPass] = useState('');
     const [newPass, setNewPass] = useState('');
@@ -65,34 +66,44 @@ export default function Settings({
             .catch(() => setYtOK(false));
     }, []);
 
-    const saveProfile = async () => {
-        setSavingProfile(true);
-        try {
-            const r = await api.updateProfile(username.trim(), avatar);
-            onProfile({ user: r.user, avatar: r.avatar });
-            toast.success('资料已更新,WebDAV 用户名同步生效');
-        } catch (e) {
-            toast.error(e instanceof Error ? e.message : '保存失败');
-        } finally {
-            setSavingProfile(false);
+    // 资料 + 密码一个按钮保存:改了哪部分就提交哪部分
+    const save = async () => {
+        const profileChanged =
+            username.trim() !== profile.user || avatar !== profile.avatar;
+        const wantPass = oldPass !== '' || newPass !== '' || confirm !== '';
+        if (wantPass) {
+            if (!oldPass || !newPass) {
+                toast.warning('修改密码需要填写当前密码和新密码');
+                return;
+            }
+            if (newPass !== confirm) {
+                toast.warning('两次输入的新密码不一致');
+                return;
+            }
         }
-    };
-
-    const changePass = async () => {
-        if (!oldPass || !newPass) return;
-        if (newPass !== confirm) {
-            toast.warning('两次输入的新密码不一致');
+        if (!profileChanged && !wantPass) {
+            toast.info('没有需要保存的改动');
             return;
         }
         setSaving(true);
         try {
-            await api.changePassword(oldPass, newPass);
-            toast.success('密码已修改,WebDAV 也使用新密码');
-            setOldPass('');
-            setNewPass('');
-            setConfirm('');
+            if (profileChanged) {
+                const r = await api.updateProfile(username.trim(), avatar);
+                onProfile({ user: r.user, avatar: r.avatar });
+            }
+            if (wantPass) {
+                await api.changePassword(oldPass, newPass);
+                setOldPass('');
+                setNewPass('');
+                setConfirm('');
+            }
+            toast.success(
+                wantPass
+                    ? '已保存,新密码即刻生效(WebDAV 同步)'
+                    : '资料已更新,WebDAV 用户名同步生效',
+            );
         } catch (e) {
-            toast.error(e instanceof Error ? e.message : '修改失败');
+            toast.error(e instanceof Error ? e.message : '保存失败');
         } finally {
             setSaving(false);
         }
@@ -147,7 +158,7 @@ export default function Settings({
             <h2 className="text-xl font-extrabold mb-4">设置</h2>
 
             <div className="grid md:grid-cols-2 gap-4 items-start">
-                {/* 个人资料 + 修改密码合并 */}
+                {/* 个人资料 + 修改密码:一个按钮统一保存 */}
                 <Card>
                     <CardTitle>
                         <UserRound className="size-4 text-leaf-dark" /> 个人资料
@@ -162,17 +173,14 @@ export default function Settings({
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                         />
-                        <Button variant="primary" disabled={savingProfile} onClick={saveProfile}>
-                            保存资料
-                        </Button>
-                        <p className="text-xs text-ink-soft">
-                            改用户名后,WebDAV 登录用户名也会变,手机端记得同步修改
-                        </p>
                     </div>
 
                     <div className="border-t border-line/70 mt-4 pt-4">
                         <div className="font-bold text-sm mb-2.5 flex items-center gap-1.5">
                             <KeyRound className="size-3.5 text-leaf-dark" /> 修改密码
+                            <span className="text-xs text-ink-soft font-normal">
+                                (不改密码就留空)
+                            </span>
                         </div>
                         <div className="flex flex-col gap-2.5">
                             <Input
@@ -196,10 +204,16 @@ export default function Settings({
                                 autoComplete="new-password"
                                 onChange={(e) => setConfirm(e.target.value)}
                             />
-                            <Button variant="primary" disabled={saving} onClick={changePass}>
-                                修改密码
-                            </Button>
                         </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 mt-4">
+                        <Button variant="primary" disabled={saving} onClick={save}>
+                            {saving ? '保存中…' : '保存'}
+                        </Button>
+                        <p className="text-xs text-ink-soft">
+                            改用户名/密码后,WebDAV 的登录信息同步变化,手机端记得更新
+                        </p>
                     </div>
                 </Card>
 
@@ -257,12 +271,30 @@ export default function Settings({
                     </Card>
                 </div>
 
+                {/* 存储策略入口 */}
+                <Link to="/storage" className="block">
+                    <Card className="hover:border-leaf/50 transition-colors">
+                        <div className="flex items-center gap-3">
+                            <Cloud className="size-5 text-leaf-dark shrink-0" />
+                            <div className="flex-1 min-w-0">
+                                <div className="font-extrabold text-base">存储策略</div>
+                                <div className="text-xs text-ink-soft mt-0.5">
+                                    挂载 Cloudflare R2 / S3 兼容对象存储,显示为 @名称
+                                    文件夹,网页与 WebDAV 通用
+                                </div>
+                            </div>
+                            <ChevronRight className="size-4 text-ink-soft shrink-0" />
+                        </div>
+                    </Card>
+                </Link>
+
                 <Card>
                     <CardTitle>
                         <Radio className="size-4 text-leaf-dark" /> WebDAV
                     </CardTitle>
                     <p className="text-sm text-ink-soft mb-2">
-                        手机播放器/文件管理器里添加 WebDAV 服务,即可直连整个网盘:
+                        手机播放器/文件管理器里添加 WebDAV 服务,即可直连整个网盘
+                        (含 @外部存储挂载):
                     </p>
                     {kv('地址', <code className="bg-paper-2 rounded-lg px-2 py-0.5 break-all">{davURL}</code>)}
                     {kv('用户名', <code className="bg-paper-2 rounded-lg px-2 py-0.5">{profile.user}</code>)}

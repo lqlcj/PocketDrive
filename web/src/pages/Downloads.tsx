@@ -165,6 +165,7 @@ export default function Downloads() {
             <FolderPicker
                 open={pickerOpen}
                 initial={dir}
+                hideMounts
                 onClose={() => setPickerOpen(false)}
                 onSelect={setDir}
             />

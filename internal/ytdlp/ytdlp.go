@@ -102,6 +102,9 @@ func (m *Manager) Add(rawURL, relDir, preset string, opts Options) (*db.YtdlpTas
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, errors.New("仅支持 http/https 视频页链接")
 	}
+	if strings.HasPrefix(relDir, "@") {
+		return nil, errors.New("yt下载只能保存到本机存储(下载完成后可再移动/上传到外部存储)")
+	}
 	np, ok := normalizePreset(preset)
 	if !ok {
 		return nil, errors.New("未知格式预设")

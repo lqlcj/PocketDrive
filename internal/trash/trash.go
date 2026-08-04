@@ -13,6 +13,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/httpx"
@@ -26,11 +27,12 @@ const (
 type Service struct {
 	db    *gorm.DB
 	files *files.Service
+	cloud *cloud.Service
 	stop  chan struct{}
 }
 
-func New(gdb *gorm.DB, fs *files.Service) *Service {
-	return &Service{db: gdb, files: fs, stop: make(chan struct{})}
+func New(gdb *gorm.DB, fs *files.Service, cs *cloud.Service) *Service {
+	return &Service{db: gdb, files: fs, cloud: cs, stop: make(chan struct{})}
 }
 
 // Start runs the 30-day auto-purge loop.
@@ -125,7 +127,8 @@ func (s *Service) permDelete(item *db.TrashItem) error {
 // ---- HTTP handlers ----
 
 // HandleDeleteToTrash replaces the old permanent delete: files move to
-// the recycle bin instead.
+// the recycle bin instead. 外部存储没有"同卷 rename",无法进回收站,
+// 直接永久删除(前端弹窗有相应提示)。
 func (s *Service) HandleDeleteToTrash(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Paths []string `json:"paths"`
@@ -134,7 +137,24 @@ func (s *Service) HandleDeleteToTrash(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	for _, p := range req.Paths {
+	for _, raw := range req.Paths {
+		p := files.CleanPath(raw)
+		if cloud.IsMountPath(p) {
+			m, rel, ok := s.cloud.Resolve(p)
+			if !ok {
+				httpx.Err(w, http.StatusNotFound, "外部存储不存在或未挂载")
+				return
+			}
+			if rel == "" {
+				httpx.Err(w, http.StatusBadRequest, "挂载点请到「存储策略」里删除")
+				return
+			}
+			if err := m.Delete(r.Context(), rel); err != nil {
+				httpx.Err(w, http.StatusBadGateway, err.Error())
+				return
+			}
+			continue
+		}
 		if err := s.Trash(p); err != nil {
 			httpx.Err(w, http.StatusBadRequest, err.Error())
 			return

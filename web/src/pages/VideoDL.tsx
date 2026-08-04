@@ -179,6 +179,7 @@ export default function VideoDL() {
             <FolderPicker
                 open={pickerOpen}
                 initial={dir}
+                hideMounts
                 onClose={() => setPickerOpen(false)}
                 onSelect={setDir}
             />

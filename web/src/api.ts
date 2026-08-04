@@ -136,6 +136,29 @@ export interface RecentFile {
     mtime: number;
 }
 
+export interface StoragePolicy {
+    id: number;
+    name: string;
+    type: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKey: string;
+    basePath: string;
+    connected: boolean;
+}
+
+export interface StoragePolicyInput {
+    id?: number;
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKey: string;
+    secretKey: string;
+    basePath: string;
+}
+
 export const api = {
     login: (username: string, password: string) =>
         post<{ ok: boolean } & Profile>('/api/v1/auth/login', { username, password }),
@@ -188,7 +211,14 @@ export const api = {
     setIcon: (path: string, icon: string) =>
         post<{ ok: boolean }>('/api/v1/icons', { path, icon }),
 
-    uploadInit: () => post<{ id: string }>('/api/v1/files/upload/init', {}),
+    storages: () => req<{ policies: StoragePolicy[] }>('/api/v1/storages'),
+    saveStorage: (p: StoragePolicyInput) =>
+        post<{ ok: boolean; id: number }>('/api/v1/storages', p),
+    deleteStorage: (id: number) => post<{ ok: boolean }>('/api/v1/storages/delete', { id }),
+    testStorage: (p: Partial<StoragePolicyInput>) =>
+        post<{ ok: boolean }>('/api/v1/storages/test', p),
+
+    uploadInit: (path: string) => post<{ id: string }>('/api/v1/files/upload/init', { path }),
     uploadChunk: async (id: string, index: number, blob: Blob) => {
         const resp = await fetch(
             `/api/v1/files/upload/chunk?id=${id}&index=${index}`,

@@ -68,6 +68,21 @@ type FolderIcon struct {
 	Icon string `gorm:"size:16" json:"icon"`
 }
 
+// StoragePolicy 外部存储策略(S3 兼容:AWS S3 / Cloudflare R2 / MinIO…),
+// 挂载为网盘根目录下的 @Name 虚拟文件夹;SecretKey 永不回传前端。
+type StoragePolicy struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"uniqueIndex;size:32" json:"name"`
+	Type      string    `gorm:"size:16" json:"type"` // s3
+	Endpoint  string    `json:"endpoint"`
+	Region    string    `json:"region"`
+	Bucket    string    `json:"bucket"`
+	AccessKey string    `json:"accessKey"`
+	SecretKey string    `json:"-"`
+	BasePath  string    `json:"basePath"` // 桶内前缀,可空
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 func Open(path string) (*gorm.DB, error) {
 	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	g, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -82,7 +97,7 @@ func Open(path string) (*gorm.DB, error) {
 	}
 	// glebarez/sqlite 纯 Go 驱动,单连接避免写锁竞争
 	sqlDB.SetMaxOpenConns(1)
-	if err := g.AutoMigrate(&Setting{}, &DownloadTask{}, &YtdlpTask{}, &Share{}, &TrashItem{}, &FolderIcon{}); err != nil {
+	if err := g.AutoMigrate(&Setting{}, &DownloadTask{}, &YtdlpTask{}, &Share{}, &TrashItem{}, &FolderIcon{}, &StoragePolicy{}); err != nil {
 		return nil, err
 	}
 	return g, nil

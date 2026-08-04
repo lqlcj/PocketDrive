@@ -13,6 +13,7 @@ import VideoDL from './pages/VideoDL';
 import SharesPage from './pages/SharesPage';
 import Trash from './pages/Trash';
 import Settings from './pages/Settings';
+import StoragePage from './pages/StoragePage';
 import SharePage from './pages/SharePage';
 
 function Private({
@@ -46,6 +47,7 @@ function Private({
                 <Route path="/video" element={<VideoDL />} />
                 <Route path="/shares" element={<SharesPage />} />
                 <Route path="/trash" element={<Trash />} />
+                <Route path="/storage" element={<StoragePage />} />
                 <Route
                     path="/settings"
                     element={<Settings profile={profile} onProfile={onProfile} />}

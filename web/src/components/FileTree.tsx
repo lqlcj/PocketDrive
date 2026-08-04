@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Home } from 'lucide-react';
+import { ChevronDown, ChevronRight, Cloud, Home } from 'lucide-react';
 import { api } from '../api';
 import { EntryIcon } from './KindIcon';
 import { cn } from '../lib/utils';
@@ -120,6 +120,15 @@ export default function FileTree({
                                 className={cn(
                                     'size-4 shrink-0',
                                     active ? 'text-white' : 'text-leaf-dark',
+                                )}
+                            />
+                        ) : name.startsWith('@') ? (
+                            <Cloud
+                                className={cn(
+                                    'size-4 shrink-0',
+                                    active
+                                        ? 'text-white'
+                                        : 'text-sky-600 dark:text-sky-400',
                                 )}
                             />
                         ) : (

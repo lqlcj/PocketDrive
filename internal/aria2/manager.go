@@ -193,8 +193,19 @@ func (m *Manager) taskOpts(relDir string, bt bool) map[string]string {
 	return opts
 }
 
+// aria2 是本机进程,只能写本机磁盘;外部存储(@挂载)不可作为下载目录
+func validDownloadDir(relDir string) error {
+	if strings.HasPrefix(relDir, "@") {
+		return errors.New("离线下载只能保存到本机存储(下载完成后可再移动/上传到外部存储)")
+	}
+	return nil
+}
+
 func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	if err := validURL(rawURL); err != nil {
+		return nil, err
+	}
+	if err := validDownloadDir(relDir); err != nil {
 		return nil, err
 	}
 	opts := m.taskOpts(relDir, strings.HasPrefix(rawURL, "magnet:"))
@@ -213,6 +224,9 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 
 // AddTorrent 用上传的 .torrent 文件(base64)创建 BT 任务。
 func (m *Manager) AddTorrent(torrentB64, relDir, name string) (*db.DownloadTask, error) {
+	if err := validDownloadDir(relDir); err != nil {
+		return nil, err
+	}
 	raw, err := base64.StdEncoding.DecodeString(torrentB64)
 	if err != nil {
 		return nil, errors.New("种子文件内容不是合法的 base64")

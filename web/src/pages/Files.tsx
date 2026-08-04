@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+    Cloud,
     FolderOpen,
     FolderPlus,
+    HardDrive,
     Home,
     LayoutGrid,
     List,
@@ -12,7 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { FileEntry, Share } from '../api';
+import type { FileEntry, Share, StoragePolicy } from '../api';
 import { fileKind, formatBytes, formatTime, shareLink } from '../util';
 import Preview from '../components/Preview';
 import FolderPicker from '../components/FolderPicker';
@@ -28,6 +30,8 @@ import { cn } from '../lib/utils';
 type ViewMode = 'list' | 'grid';
 
 const DND_TYPE = 'application/x-pd-path';
+// 不得小于 5MiB:传到外部存储时每块直接映射为一个 S3 Part,
+// S3 规定除末片外每片至少 5MiB,调小会导致合并分片失败
 const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB
 const BIG_FILE = 64 * 1024 * 1024; // 超过 64MB 走分片上传
 
@@ -76,7 +80,9 @@ function Thumb({
 }) {
     const kind = fileKind(name, dir);
     const [failed, setFailed] = useState(false);
-    if (!dir && (kind === 'image' || kind === 'video') && !failed) {
+    // 外部存储不生成缩略图,直接出图标
+    const inMount = path.startsWith('@');
+    if (!dir && !inMount && (kind === 'image' || kind === 'video') && !failed) {
         return (
             <img
                 className="w-full h-28 object-cover bg-paper-2"
@@ -85,6 +91,13 @@ function Thumb({
                 loading="lazy"
                 onError={() => setFailed(true)}
             />
+        );
+    }
+    if (dir && name.startsWith('@')) {
+        return (
+            <div className="w-full h-28 flex items-center justify-center bg-paper-2">
+                <Cloud className="size-10 text-sky-600 dark:text-sky-400" />
+            </div>
         );
     }
     return (
@@ -104,6 +117,10 @@ export default function Files() {
     const path = params['*'] ?? '';
     const navigate = useNavigate();
 
+    // 当前所在存储:''=本机,'@R2'=挂载
+    const mountName = path.startsWith('@') ? path.split('/')[0]! : '';
+    const inMount = mountName !== '';
+
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
@@ -114,6 +131,7 @@ export default function Files() {
     );
     const [treeVersion, setTreeVersion] = useState(0);
     const [icons, setIcons] = useState<Record<string, string>>({});
+    const [policies, setPolicies] = useState<StoragePolicy[]>([]);
 
     const [mkdirOpen, setMkdirOpen] = useState(false);
     const [mkdirName, setMkdirName] = useState('');
@@ -155,6 +173,11 @@ export default function Files() {
 
     useEffect(load, [load]);
     useEffect(loadIcons, [loadIcons]);
+    useEffect(() => {
+        api.storages()
+            .then((r) => setPolicies(r.policies))
+            .catch(() => undefined);
+    }, []);
 
     const join = (name: string) => (path === '' ? name : `${path}/${name}`);
 
@@ -165,7 +188,7 @@ export default function Files() {
 
     // ---- 上传:大文件分片,小文件普通 multipart ----
     const uploadBig = async (file: File) => {
-        const { id } = await api.uploadInit();
+        const { id } = await api.uploadInit(join(file.name));
         const chunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
         for (let i = 0; i < chunks; i++) {
             const blob = file.slice(i * CHUNK_SIZE, Math.min(file.size, (i + 1) * CHUNK_SIZE));
@@ -302,55 +325,83 @@ export default function Files() {
         if (!src) return;
         const dest = join(folder.name);
         if (src === dest) return;
+        // 跨存储拖拽:后端不支持,前端直接拦下给出提示
+        const srcMount = src.startsWith('@') ? src.split('/')[0] : '';
+        const destMount = dest.startsWith('@') ? dest.split('/')[0] : '';
+        if (srcMount !== destMount) {
+            toast.warning('暂不支持跨存储移动,请下载后再上传到目标存储');
+            return;
+        }
         doMoveTo(src, dest);
     };
 
-    const entryIcon = (e: FileEntry) => (
-        <EntryIcon
-            kind={fileKind(e.name, e.dir)}
-            custom={e.dir ? icons[join(e.name)] : undefined}
-            className="size-[18px]"
-            emojiClassName="text-lg"
-        />
-    );
+    const entryIcon = (e: FileEntry) => {
+        if (e.dir && e.name.startsWith('@')) {
+            return <Cloud className="size-[18px] text-sky-600 dark:text-sky-400 shrink-0" />;
+        }
+        return (
+            <EntryIcon
+                kind={fileKind(e.name, e.dir)}
+                custom={e.dir ? icons[join(e.name)] : undefined}
+                className="size-[18px]"
+                emojiClassName="text-lg"
+            />
+        );
+    };
 
-    const actions = (e: FileEntry) => (
-        <span className="flex gap-0.5 shrink-0 flex-wrap justify-end">
-            {!e.dir && (
-                <>
-                    <a href={api.downloadUrl(join(e.name), true)} download={e.name}>
+    // 根目录里的 @挂载点是策略的化身:只能打开,管理去「存储策略」页
+    const isMountRoot = (e: FileEntry) => path === '' && e.dir && e.name.startsWith('@');
+
+    const actions = (e: FileEntry) => {
+        if (isMountRoot(e)) {
+            return (
+                <span className="flex gap-0.5 shrink-0">
+                    <Link to="/storage">
                         <Button variant="ghost" size="sm">
-                            下载
+                            管理
                         </Button>
-                    </a>
-                    <Button variant="ghost" size="sm" onClick={() => setShareTarget(e)}>
-                        分享
+                    </Link>
+                </span>
+            );
+        }
+        return (
+            <span className="flex gap-0.5 shrink-0 flex-wrap justify-end">
+                {!e.dir && (
+                    <>
+                        <a href={api.downloadUrl(join(e.name), true)} download={e.name}>
+                            <Button variant="ghost" size="sm">
+                                下载
+                            </Button>
+                        </a>
+                        <Button variant="ghost" size="sm" onClick={() => setShareTarget(e)}>
+                            分享
+                        </Button>
+                    </>
+                )}
+                {e.dir && (
+                    <Button variant="ghost" size="sm" onClick={() => setIconTarget(e)}>
+                        图标
                     </Button>
-                </>
-            )}
-            {e.dir && (
-                <Button variant="ghost" size="sm" onClick={() => setIconTarget(e)}>
-                    图标
+                )}
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                        setRenameTarget(e);
+                        setRenameName(e.name);
+                    }}
+                >
+                    重命名
                 </Button>
-            )}
-            <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                    setRenameTarget(e);
-                    setRenameName(e.name);
-                }}
-            >
-                重命名
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setMoveTarget(e)}>
-                移动
-            </Button>
-            <Button variant="ghost-danger" size="sm" onClick={() => setDeleteTarget(e)}>
-                删除
-            </Button>
-        </span>
-    );
+                <Button variant="ghost" size="sm" onClick={() => setMoveTarget(e)}>
+                    移动
+                </Button>
+                <Button variant="ghost-danger" size="sm" onClick={() => setDeleteTarget(e)}>
+                    删除
+                </Button>
+            </span>
+        );
+    };
 
     return (
         <div
@@ -369,6 +420,31 @@ export default function Files() {
                 <h2 className="text-xl font-extrabold flex items-center gap-2">
                     <FolderOpen className="size-5 text-leaf-dark" /> 我的文件
                 </h2>
+                {/* 存储策略切换:选择后浏览/上传都发生在对应存储 */}
+                <div className="relative inline-flex items-center">
+                    {inMount ? (
+                        <Cloud className="absolute left-3 size-3.5 text-sky-600 dark:text-sky-400 pointer-events-none" />
+                    ) : (
+                        <HardDrive className="absolute left-3 size-3.5 text-ink-soft pointer-events-none" />
+                    )}
+                    <NativeSelect
+                        className="h-8 text-xs pl-8 pr-2"
+                        value={mountName}
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '__manage__') navigate('/storage');
+                            else navigate(v === '' ? '/files' : `/files/${v}`);
+                        }}
+                    >
+                        <option value="">本机存储</option>
+                        {policies.map((p) => (
+                            <option key={p.id} value={`@${p.name}`}>
+                                @{p.name}
+                            </option>
+                        ))}
+                        <option value="__manage__">＋ 管理存储策略…</option>
+                    </NativeSelect>
+                </div>
                 <div className="ml-auto flex gap-2 flex-wrap">
                     <input
                         ref={fileInput}
@@ -626,10 +702,12 @@ export default function Files() {
                 </DialogContent>
             </Dialog>
 
-            {/* 移动:目录选择器 */}
+            {/* 移动:目录选择器(挂载内移动锁定在同一存储;本机隐藏挂载点) */}
             <FolderPicker
                 open={moveTarget !== null}
                 title={`移动「${moveTarget?.name ?? ''}」到…`}
+                rootPath={mountName}
+                hideMounts={!inMount}
                 onClose={() => setMoveTarget(null)}
                 onSelect={(dir) => moveTarget && doMoveTo(join(moveTarget.name), dir)}
             />
@@ -677,18 +755,27 @@ export default function Files() {
                 </DialogContent>
             </Dialog>
 
-            {/* 删除(进回收站) */}
+            {/* 删除(本机进回收站;外部存储直接永久删除) */}
             <Dialog
                 open={deleteTarget !== null}
                 onOpenChange={(o) => !o && setDeleteTarget(null)}
             >
-                <DialogContent title="放进垃圾桶">
+                <DialogContent title={inMount ? '永久删除' : '放进垃圾桶'}>
                     <p className="text-sm">
-                        把「{deleteTarget?.name}」放进垃圾桶?30 天内可以在垃圾桶里找回,
-                        30 天后自动清理。
+                        {inMount ? (
+                            <>
+                                外部存储不经回收站,「{deleteTarget?.name}」将
+                                <b>直接从存储桶永久删除</b>,无法找回。确定吗?
+                            </>
+                        ) : (
+                            <>
+                                把「{deleteTarget?.name}」放进垃圾桶?30
+                                天内可以在垃圾桶里找回, 30 天后自动清理。
+                            </>
+                        )}
                     </p>
                     <DialogFooter
-                        okText="放进垃圾桶"
+                        okText={inMount ? '永久删除' : '放进垃圾桶'}
                         okDanger
                         onOk={() =>
                             deleteTarget &&

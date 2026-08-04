@@ -5,6 +5,7 @@ import (
 
 	"pocketdrive/internal/aria2"
 	"pocketdrive/internal/auth"
+	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/config"
 	"pocketdrive/internal/dav"
 	"pocketdrive/internal/files"
@@ -30,6 +31,7 @@ type Deps struct {
 	Trash   *trash.Service
 	Index   *index.Service
 	Icons   *icons.Service
+	Cloud   *cloud.Service
 }
 
 func New(cfg *config.Config, d Deps) *http.Server {
@@ -83,6 +85,12 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/icons", d.Icons.HandleList)
 	api.HandleFunc("POST /api/v1/icons", d.Icons.HandleSet)
 
+	// 存储策略(S3/R2 挂载)
+	api.HandleFunc("GET /api/v1/storages", d.Cloud.HandleList)
+	api.HandleFunc("POST /api/v1/storages", d.Cloud.HandleSave)
+	api.HandleFunc("POST /api/v1/storages/delete", d.Cloud.HandleDelete)
+	api.HandleFunc("POST /api/v1/storages/test", d.Cloud.HandleTest)
+
 	api.HandleFunc("GET /api/v1/downloads/settings", d.Aria2.HandleGetSettings)
 	api.HandleFunc("POST /api/v1/downloads/settings", d.Aria2.HandleSaveSettings)
 	api.HandleFunc("POST /api/v1/downloads/trackers/update", d.Aria2.HandleUpdateTrackers)
@@ -118,8 +126,8 @@ func New(cfg *config.Config, d Deps) *http.Server {
 
 	mux.Handle("/api/v1/", d.Auth.Middleware(api))
 
-	// WebDAV: whole data dir, Basic Auth (same admin account)
-	davHandler := d.Auth.BasicAuth(dav.Handler(cfg.DataDir))
+	// WebDAV: whole data dir + cloud mounts, Basic Auth (same admin account)
+	davHandler := d.Auth.BasicAuth(dav.Handler(cfg.DataDir, d.Cloud))
 	mux.Handle("/dav/", davHandler)
 	mux.Handle("/dav", davHandler)
 

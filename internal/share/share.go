@@ -4,6 +4,7 @@
 package share
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/httpx"
@@ -25,6 +27,7 @@ type Service struct {
 	db     *gorm.DB
 	files  *files.Service
 	thumbs *thumbs.Service
+	cloud  *cloud.Service
 
 	mu      sync.Mutex
 	limiter map[string]*ipEntry
@@ -35,8 +38,8 @@ type ipEntry struct {
 	blockedUntil time.Time
 }
 
-func New(gdb *gorm.DB, fs *files.Service, th *thumbs.Service) *Service {
-	return &Service{db: gdb, files: fs, thumbs: th, limiter: make(map[string]*ipEntry)}
+func New(gdb *gorm.DB, fs *files.Service, th *thumbs.Service, cs *cloud.Service) *Service {
+	return &Service{db: gdb, files: fs, thumbs: th, cloud: cs, limiter: make(map[string]*ipEntry)}
 }
 
 func randToken(n int) string {
@@ -51,6 +54,26 @@ func randToken(n int) string {
 	return string(b)
 }
 
+func ctxTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+// mountStat 解析分享路径是否指向外部存储;是则返回其挂载与文件信息。
+func (s *Service) mountStat(ctx context.Context, p string) (*cloud.S3Mount, string, *cloud.Entry, error) {
+	if !cloud.IsMountPath(p) {
+		return nil, "", nil, nil
+	}
+	m, rel, ok := s.cloud.Resolve(p)
+	if !ok || rel == "" {
+		return nil, "", nil, errors.New("文件已被删除")
+	}
+	e, err := m.Stat(ctx, rel)
+	if err != nil || e.Dir {
+		return nil, "", nil, errors.New("文件已被删除")
+	}
+	return m, rel, &e, nil
+}
+
 func (s *Service) Create(p, password, shareType string, expiresHours int) (*db.Share, error) {
 	p = files.CleanPath(p)
 	if p == "" {
@@ -59,12 +82,31 @@ func (s *Service) Create(p, password, shareType string, expiresHours int) (*db.S
 	if shareType != "direct" {
 		shareType = "page"
 	}
-	fi, err := s.files.Root().Stat(p)
-	if err != nil {
-		return nil, errors.New("文件不存在")
-	}
-	if fi.IsDir() {
-		return nil, errors.New("暂不支持分享文件夹,请分享单个文件")
+	if cloud.IsMountPath(p) {
+		m, rel, ok := s.cloud.Resolve(p)
+		if !ok {
+			return nil, errors.New("外部存储不存在或未挂载")
+		}
+		if rel == "" {
+			return nil, errors.New("不能分享挂载点本身")
+		}
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		e, err := m.Stat(ctx, rel)
+		if err != nil {
+			return nil, errors.New("文件不存在")
+		}
+		if e.Dir {
+			return nil, errors.New("暂不支持分享文件夹,请分享单个文件")
+		}
+	} else {
+		fi, err := s.files.Root().Stat(p)
+		if err != nil {
+			return nil, errors.New("文件不存在")
+		}
+		if fi.IsDir() {
+			return nil, errors.New("暂不支持分享文件夹,请分享单个文件")
+		}
 	}
 	sh := db.Share{Token: randToken(10), Path: p, Type: shareType}
 	// 直链是给播放器/下载工具直接用的,不支持密码
@@ -186,6 +228,20 @@ func (s *Service) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, err.Error())
 		return
 	}
+	if m, _, e, merr := s.mountStat(r.Context(), sh.Path); m != nil || merr != nil {
+		if merr != nil {
+			httpx.Err(w, http.StatusNotFound, merr.Error())
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"name":        e.Name,
+			"size":        e.Size,
+			"mtime":       e.Mtime,
+			"needPassword": sh.HasPassword,
+			"expiresAt":   sh.ExpiresAt,
+		})
+		return
+	}
 	fi, err := s.files.Root().Stat(sh.Path)
 	if err != nil {
 		httpx.Err(w, http.StatusNotFound, "文件已被删除")
@@ -210,6 +266,19 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusForbidden, err.Error())
 		return
 	}
+	if m, rel, e, merr := s.mountStat(r.Context(), sh.Path); m != nil || merr != nil {
+		if merr != nil {
+			httpx.Err(w, http.StatusNotFound, merr.Error())
+			return
+		}
+		u, perr := m.PresignGet(r.Context(), rel, e.Name, r.URL.Query().Get("dl") == "1")
+		if perr != nil {
+			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+perr.Error())
+			return
+		}
+		http.Redirect(w, r, u, http.StatusFound)
+		return
+	}
 	f, err := s.files.Root().Open(sh.Path)
 	if err != nil {
 		httpx.Err(w, http.StatusNotFound, "文件已被删除")
@@ -229,7 +298,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleThumb serves a share's media thumbnail (public; password
-// checked the same way as download).
+// checked the same way as download). 外部存储不生成缩略图。
 func (s *Service) HandleThumb(w http.ResponseWriter, r *http.Request) {
 	sh, err := s.find(r.PathValue("token"))
 	if err != nil {
@@ -238,6 +307,10 @@ func (s *Service) HandleThumb(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.checkPassword(sh, r.URL.Query().Get("password"), httpx.ClientIP(r)); err != nil {
 		httpx.Err(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if cloud.IsMountPath(sh.Path) {
+		httpx.Err(w, http.StatusNotFound, "外部存储不提供缩略图")
 		return
 	}
 	s.thumbs.Serve(w, r, sh.Path)
@@ -252,6 +325,19 @@ func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 	sh, err := s.find(r.PathValue("token"))
 	if err != nil || sh.Type != "direct" {
 		httpx.Err(w, http.StatusNotFound, "直链不存在或已过期")
+		return
+	}
+	if m, rel, e, merr := s.mountStat(r.Context(), sh.Path); m != nil || merr != nil {
+		if merr != nil {
+			httpx.Err(w, http.StatusNotFound, merr.Error())
+			return
+		}
+		u, perr := m.PresignGet(r.Context(), rel, e.Name, false)
+		if perr != nil {
+			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+perr.Error())
+			return
+		}
+		http.Redirect(w, r, u, http.StatusFound)
 		return
 	}
 	f, err := s.files.Root().Open(sh.Path)
