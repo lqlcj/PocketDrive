@@ -1,7 +1,9 @@
 package components
 
-// HTTP 层:设置页的「组件状态」卡片。三个组件各自显示版本、是否有新版,
-// 并能单独点击升级。
+// HTTP 层:设置页的「组件状态」卡片。三个组件各自显示版本,并如实
+// 说明各自该怎么升级——只有 yt-dlp 能在网页里点一下就更新,另外两个
+// 得在服务器上 docker compose pull,这一点必须写在界面上,不然用户
+// 到要更新的那天无从下手。
 
 import (
 	"context"
@@ -21,15 +23,14 @@ type Service struct {
 	m  *Manager
 	db *gorm.DB
 
-	// aria2 升级后要重启子进程,新二进制才会生效;连的是外部 aria2 时为 nil
-	restartAria2 func(context.Context) error
-	// aria2 当前是否连得上(展示用)
-	aria2OK func() bool
+	// aria2 跑在自己的容器里,版本和可达性都只能问它自己
+	aria2Version func() string
+	aria2OK      func() bool
 }
 
-func NewService(m *Manager, gdb *gorm.DB, restartAria2 func(context.Context) error,
+func NewService(m *Manager, gdb *gorm.DB, aria2Version func() string,
 	aria2OK func() bool) *Service {
-	return &Service{m: m, db: gdb, restartAria2: restartAria2, aria2OK: aria2OK}
+	return &Service{m: m, db: gdb, aria2Version: aria2Version, aria2OK: aria2OK}
 }
 
 type view struct {
@@ -37,8 +38,10 @@ type view struct {
 	Title       string `json:"title"`
 	Note        string `json:"note"`
 	LastUpdated string `json:"lastUpdated"`
-	// Running 仅对 aria2 有意义:装好了但进程没连上也算不可用
+	// Running 仅对 aria2 有意义:它在另一个容器里,可能连不上
 	Running bool `json:"running"`
+	// UpdateHint 是不能在网页里升级时,替代按钮显示的一句话
+	UpdateHint string `json:"updateHint"`
 }
 
 var meta = map[Kind]struct{ title, note string }{
@@ -47,17 +50,40 @@ var meta = map[Kind]struct{ title, note string }{
 	FFmpeg: {"ffmpeg", "视频封面抽帧、yt下载的音视频合并"},
 }
 
+// updateHint 用一句话说明组件的升级渠道,直接显示在网页上。
+func updateHint(c Channel) string {
+	switch c {
+	case ChanSidecar:
+		return "随 aria2 容器更新"
+	case ChanImage:
+		return "随 PocketDrive 镜像更新"
+	case ChanSystem:
+		return "由本机 PATH 决定"
+	}
+	return ""
+}
+
 func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
 	// 查上游版本要联网,给个上限免得前端一直转
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
 
-	out := make([]view, 0, 3)
+	out := make([]view, 0, len(meta))
 	for _, k := range []Kind{Ytdlp, Aria2, FFmpeg} {
 		info := s.m.Status(ctx, k)
-		v := view{Info: info, Title: meta[k].title, Note: meta[k].note, Running: true}
-		if k == Aria2 && s.aria2OK != nil {
-			v.Running = s.aria2OK()
+		v := view{
+			Info: info, Title: meta[k].title, Note: meta[k].note,
+			Running: true, UpdateHint: updateHint(info.Channel),
+		}
+		if k == Aria2 {
+			// 不在本容器内:版本走 RPC,连不上就什么也报不出来
+			if s.aria2Version != nil {
+				v.Version = s.aria2Version()
+				v.Installed = v.Version != ""
+			}
+			if s.aria2OK != nil {
+				v.Running = s.aria2OK()
+			}
 		}
 		var st db.Setting
 		if s.db.First(&st, "key = ?", settingKey(k)).Error == nil {
@@ -67,7 +93,8 @@ func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"components": out,
-		"managed":    s.m.Managed(),
+		// 有没有任何一个组件能在网页里升级(本机开发时没有)
+		"managed": s.m.Managed(Ytdlp),
 	})
 }
 
@@ -97,15 +124,7 @@ func (s *Service) HandleInstall(w http.ResponseWriter, r *http.Request) {
 		Key:   settingKey(k),
 		Value: time.Now().Format(time.RFC3339),
 	})
-
-	// aria2 换了二进制要重启进程才生效
-	restarted := false
-	if k == Aria2 && s.restartAria2 != nil {
-		if err := s.restartAria2(ctx); err == nil {
-			restarted = true
-		}
-	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"ok": true, "version": s.m.Version(k), "restarted": restarted,
+		"ok": true, "version": s.m.Version(k),
 	})
 }

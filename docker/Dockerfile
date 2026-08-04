@@ -1,50 +1,46 @@
 # 多阶段构建:前端 → Go 单二进制 → 运行镜像
-# aria2 / yt-dlp / ffmpeg 三个组件都由 PocketDrive 自己管理(装在 /config 卷内),
-# 网页设置页可各自升级,且升级结果跨容器重启保留。镜像里放一份内置副本作为
-# 首次启动的基线,离线环境不联网也能直接用。
-FROM node:24-alpine AS webbuild
+#
+# 镜像里只带 ffmpeg(Alpine 官方包)和一份 yt-dlp 内置副本:
+#   yt-dlp  首次启动复制到 /config/bin(volume 内),之后在网页里点一下
+#           就能升级,升级结果跨容器重启保留
+#   ffmpeg  随本镜像发布,docker compose pull 即可升级
+#   aria2   跑在自己的容器里(见 docker-compose.yml),同样 pull 升级
+FROM --platform=$BUILDPLATFORM node:24-alpine AS webbuild
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS gobuild
+# 同样固定在构建机架构上:CGO 关着,交叉编译即可,不必让 npm/go 走 QEMU 模拟
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS gobuild
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=webbuild /src/web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pocketdrive ./cmd/pocketdrive
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/pocketdrive ./cmd/pocketdrive
 
-# 组件内置副本:各取官方/主流静态构建,不依赖镜像里的动态库
-FROM alpine:3.22 AS bins
+# yt-dlp 内置副本。跑在构建机架构上(只是下载,不执行),免得交叉构建
+# arm64 时整个阶段走 QEMU 模拟。
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS ytdlp
 ARG TARGETARCH
-RUN apk add --no-cache curl unzip xz tar \
+RUN apk add --no-cache curl \
     && mkdir -p /bundled \
     && case "$TARGETARCH" in \
-         arm64) YTDLP=yt-dlp_musllinux_aarch64; \
-                ARIA=aria2-aarch64-linux-musl_static.zip; \
-                FF=ffmpeg-master-latest-linuxarm64-gpl.tar.xz ;; \
-         *)     YTDLP=yt-dlp_musllinux; \
-                ARIA=aria2-x86_64-linux-musl_static.zip; \
-                FF=ffmpeg-master-latest-linux64-gpl.tar.xz ;; \
+         arm64) YTDLP=yt-dlp_musllinux_aarch64 ;; \
+         *)     YTDLP=yt-dlp_musllinux ;; \
        esac \
     && curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP}" \
          -o /bundled/yt-dlp \
-    && curl -fsSL "https://github.com/abcfy2/aria2-static-build/releases/latest/download/${ARIA}" \
-         -o /tmp/aria2.zip \
-    && unzip -j -o /tmp/aria2.zip '*/aria2c' -d /bundled \
-    && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/${FF}" \
-         -o /tmp/ffmpeg.tar.xz \
-    && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp \
-    && find /tmp -type f -name ffmpeg -path '*/bin/*' -exec cp {} /bundled/ffmpeg \; \
-    && chmod +x /bundled/* \
-    && rm -rf /tmp/*
+    && chmod +x /bundled/yt-dlp
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata
-COPY --from=bins /bundled /opt/pocketdrive/bin
+# ffmpeg 仅用于 yt-dlp 流合并(remux)和视频封面抽帧,不做转码
+RUN apk add --no-cache ca-certificates tzdata ffmpeg
+COPY --from=ytdlp /bundled /opt/pocketdrive/bin
 COPY --from=gobuild /out/pocketdrive /usr/local/bin/pocketdrive
 ENV POCKETDRIVE_ADDR=:16688 \
     POCKETDRIVE_DATA_DIR=/data \
@@ -52,6 +48,6 @@ ENV POCKETDRIVE_ADDR=:16688 \
     POCKETDRIVE_BIN_DIR=/config/bin \
     POCKETDRIVE_BIN_BUNDLED=/opt/pocketdrive/bin
 VOLUME ["/data", "/config"]
-# 16688 网页+API+WebDAV;6888 是 aria2 的 BT 监听端口(TCP+UDP,可选)
-EXPOSE 16688 6888 6888/udp
+# 只有网页+API+WebDAV;BT 端口属于 aria2 容器
+EXPOSE 16688
 ENTRYPOINT ["pocketdrive"]

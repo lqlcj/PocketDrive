@@ -1,13 +1,15 @@
 package components
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // EnsureBundled 的关键性质:绝不覆盖已存在的副本。/config/bin 里的
-// 组件可能已被用户在网页上升级过,启动时若拿镜像内置的旧版盖回去,
+// yt-dlp 可能已被用户在网页上升级过,启动时若拿镜像内置的旧版盖回去,
 // 用户的升级就白做了。
 func TestEnsureBundled(t *testing.T) {
 	t.Run("不托管时什么都不做", func(t *testing.T) {
@@ -43,25 +45,107 @@ func TestEnsureBundled(t *testing.T) {
 
 	t.Run("已存在的不被覆盖", func(t *testing.T) {
 		bundled, binDir := t.TempDir(), t.TempDir()
-		os.WriteFile(filepath.Join(bundled, exeName("aria2c")), []byte("镜像内置的旧版"), 0o755)
+		os.WriteFile(filepath.Join(bundled, exeName("yt-dlp")), []byte("镜像内置的旧版"), 0o755)
 		m := New(binDir, bundled)
-		os.WriteFile(m.Path(Aria2), []byte("用户升级过的新版"), 0o755)
+		os.WriteFile(m.Path(Ytdlp), []byte("用户升级过的新版"), 0o755)
 
-		m.EnsureBundled(Aria2)
-		got, _ := os.ReadFile(m.Path(Aria2))
+		m.EnsureBundled(Ytdlp)
+		got, _ := os.ReadFile(m.Path(Ytdlp))
 		if string(got) != "用户升级过的新版" {
 			t.Fatalf("升级结果被镜像内置版覆盖了: %q", got)
 		}
 	})
 
-	t.Run("镜像没内置的组件跳过", func(t *testing.T) {
+	t.Run("镜像没内置就跳过", func(t *testing.T) {
 		bundled, binDir := t.TempDir(), t.TempDir()
-		m := New(binDir, bundled)
-		m.EnsureBundled(FFmpeg) // bundled 里没有 ffmpeg
-		if _, err := os.Stat(m.Path(FFmpeg)); err == nil {
+		m := New(binDir, bundled) // bundled 是空目录
+		m.EnsureBundled(Ytdlp)
+		if _, err := os.Stat(m.Path(Ytdlp)); err == nil {
 			t.Error("不该创建出空文件")
 		}
 	})
+
+	// aria2 在别的容器里、ffmpeg 随镜像走,都不该被搬进 volume:
+	// 搬进去就等于凭空多出一份永远不会被更新的副本
+	t.Run("非托管组件一概不碰", func(t *testing.T) {
+		bundled, binDir := t.TempDir(), t.TempDir()
+		os.WriteFile(filepath.Join(bundled, exeName("ffmpeg")), []byte("x"), 0o755)
+		os.WriteFile(filepath.Join(bundled, exeName("aria2")), []byte("x"), 0o755)
+		m := New(binDir, bundled)
+		m.EnsureBundled(Ytdlp, Aria2, FFmpeg)
+
+		if _, err := os.Stat(filepath.Join(binDir, exeName("ffmpeg"))); err == nil {
+			t.Error("ffmpeg 不该被复制进 volume")
+		}
+		if _, err := os.Stat(filepath.Join(binDir, exeName("aria2"))); err == nil {
+			t.Error("aria2 不该被复制进 volume")
+		}
+	})
+}
+
+// 渠道决定了网页上能对组件做什么,错了会让用户对着一个假按钮点。
+func TestChannel(t *testing.T) {
+	m := New(filepath.Join(t.TempDir(), "bin"), "")
+	cases := []struct {
+		k    Kind
+		want Channel
+	}{
+		{Ytdlp, ChanManaged},
+		{Aria2, ChanSidecar},
+		{FFmpeg, ChanImage},
+	}
+	for _, c := range cases {
+		if got := m.Channel(c.k); got != c.want {
+			t.Errorf("Channel(%s) = %q, want %q", c.k, got, c.want)
+		}
+	}
+	if !m.Managed(Ytdlp) || m.Managed(Aria2) || m.Managed(FFmpeg) {
+		t.Error("只有 yt-dlp 该是网页可升级的")
+	}
+
+	// 本机开发:没有 binDir,一切看 PATH
+	dev := New("", "")
+	for _, k := range []Kind{Ytdlp, Aria2, FFmpeg} {
+		if got := dev.Channel(k); got != ChanSystem {
+			t.Errorf("本机开发 Channel(%s) = %q, want %q", k, got, ChanSystem)
+		}
+	}
+}
+
+func TestPath(t *testing.T) {
+	dev := New("", "")
+	if got := dev.Path(Ytdlp); got != exeName("yt-dlp") {
+		t.Errorf("本机开发 Path = %q, want %q", got, exeName("yt-dlp"))
+	}
+
+	binDir := filepath.Join(t.TempDir(), "bin")
+	m := New(binDir, "")
+	if got := m.Path(Ytdlp); got != filepath.Join(binDir, exeName("yt-dlp")) {
+		t.Errorf("托管模式 Path = %q", got)
+	}
+	// ffmpeg 在镜像里,交给 PATH
+	if got := m.Path(FFmpeg); got != exeName("ffmpeg") {
+		t.Errorf("Path(ffmpeg) = %q, want %q", got, exeName("ffmpeg"))
+	}
+	// aria2 压根不在本容器内
+	if got := m.Path(Aria2); got != "" {
+		t.Errorf("Path(aria2) = %q, want 空", got)
+	}
+}
+
+// 网页只管得了 yt-dlp;对另外两个必须明确拒绝,而不是假装装上了。
+func TestInstallRejectsUnmanaged(t *testing.T) {
+	m := New(filepath.Join(t.TempDir(), "bin"), "")
+	for _, k := range []Kind{Aria2, FFmpeg} {
+		if err := m.Install(context.Background(), k); err == nil {
+			t.Errorf("Install(%s) 应当报错", k)
+		}
+	}
+	// 本机开发下连 yt-dlp 也不能装
+	dev := New("", "")
+	if err := dev.Install(context.Background(), Ytdlp); err == nil {
+		t.Error("非托管模式下 Install 应当报错")
+	}
 }
 
 func TestParseVersion(t *testing.T) {
@@ -71,11 +155,10 @@ func TestParseVersion(t *testing.T) {
 		want string
 	}{
 		{Ytdlp, "2026.01.15\n", "2026.01.15"},
-		{Aria2, "aria2 version 1.37.0\nCopyright (C) 2006 ...\n", "1.37.0"},
 		{FFmpeg, "ffmpeg version n7.1-31-g8b3f1d0 Copyright (c) 2000-2025\n", "n7.1-31-g8b3f1d0"},
 		{FFmpeg, "ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers\n", "6.1.1"},
 		// 意外的输出不能让整个状态查询崩掉
-		{Aria2, "", ""},
+		{FFmpeg, "", ""},
 		{Ytdlp, "", ""},
 	}
 	for _, c := range cases {
@@ -85,22 +168,34 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
-// 不托管模式(本机开发)下路径就是裸名字,交给 PATH 解析。
-func TestPathFallback(t *testing.T) {
-	m := New("", "")
-	if m.Managed() {
-		t.Error("binDir 为空时不该是托管模式")
-	}
-	if got := m.Path(Ytdlp); got != exeName("yt-dlp") {
-		t.Errorf("Path = %q, want %q", got, exeName("yt-dlp"))
-	}
+// 撞到大小上限时 io.Copy 是干净返回的(LimitReader 读完了),不显式
+// 检查就会留下一个「能启动但缺后半截」的二进制,而且 EnsureBundled
+// 还不会覆盖它——用户只能 SSH 进去手删。
+func TestWriteExecutableRejectsOversize(t *testing.T) {
+	old := maxDownload
+	maxDownload = 1 << 10
+	t.Cleanup(func() { maxDownload = old })
 
-	m2 := New(filepath.Join("C:", "config", "bin"), "")
-	if !m2.Managed() {
-		t.Error("配了 binDir 就该是托管模式")
+	dst := filepath.Join(t.TempDir(), "yt-dlp")
+	err := writeExecutable(dst, strings.NewReader(strings.Repeat("x", 4<<10)))
+	if err == nil {
+		t.Fatal("超过上限应当报错")
 	}
-	if got := m2.Path(Aria2); got == exeName("aria2c") {
-		t.Error("托管模式下应当返回完整路径")
+	if _, err := os.Stat(dst); err == nil {
+		t.Error("报错后不该留下目标文件")
+	}
+	if _, err := os.Stat(dst + ".tmp"); err == nil {
+		t.Error("报错后不该留下临时文件")
+	}
+}
+
+func TestWriteExecutableRejectsEmpty(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := writeExecutable(dst, strings.NewReader("")); err == nil {
+		t.Fatal("空内容应当报错")
+	}
+	if _, err := os.Stat(dst); err == nil {
+		t.Error("报错后不该留下目标文件")
 	}
 }
 
@@ -109,11 +204,11 @@ func TestFindAsset(t *testing.T) {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	}{
-		{Name: "aria2-x86_64-linux-musl_static.zip", URL: "https://example.test/x86"},
-		{Name: "aria2-aarch64-linux-musl_static.zip", URL: "https://example.test/arm"},
+		{Name: "yt-dlp_musllinux", URL: "https://example.test/x86"},
+		{Name: "yt-dlp_musllinux_aarch64", URL: "https://example.test/arm"},
 	}}
 
-	got, err := findAsset(rel, []string{"aria2-aarch64-linux-musl_static.zip"})
+	got, err := findAsset(rel, []string{"yt-dlp_musllinux_aarch64"})
 	if err != nil {
 		t.Fatalf("findAsset: %v", err)
 	}
@@ -121,7 +216,7 @@ func TestFindAsset(t *testing.T) {
 		t.Errorf("URL = %q", got)
 	}
 
-	if _, err := findAsset(rel, []string{"不存在的产物.zip"}); err == nil {
+	if _, err := findAsset(rel, []string{"不存在的产物"}); err == nil {
 		t.Error("找不到匹配产物时应当报错")
 	}
 }

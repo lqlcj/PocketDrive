@@ -1,6 +1,8 @@
 # binaries
-pocketdrive.exe
-pocketdrive
+# 必须带前导 /:不带斜杠的 pocketdrive 会匹配任意层级的同名目录,
+# 把 cmd/pocketdrive/ 整个主包也一并忽略掉。
+/pocketdrive.exe
+/pocketdrive
 /out/
 
 # runtime data
@@ -20,5 +22,6 @@ cookies.txt
 
 # local
 .claude/
-thumbs/
+# 同理带前导 /,否则会连 internal/thumbs/ 源码包一起忽略
+/thumbs/
 ck.txt

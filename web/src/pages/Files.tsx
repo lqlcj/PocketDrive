@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+    Check,
     ChevronDown,
     Cloud,
     Download,
@@ -38,6 +39,19 @@ import {
 } from '../components/ui/dropdown-menu';
 import { Progress } from '../components/ui/progress';
 import { useUploads } from '../upload/store';
+import {
+    DND_MIME,
+    baseOf,
+    canDrop,
+    dropReject,
+    endDrag,
+    parentOf,
+    readPaths,
+    setDragImage,
+    startDrag,
+    storeOf,
+    useDragPayload,
+} from '../lib/dnd';
 import { cn } from '../lib/utils';
 
 type ViewMode = 'list' | 'grid';
@@ -50,7 +64,7 @@ type RowAction = {
     sepBefore?: boolean;
 };
 
-const DND_TYPE = 'application/x-pd-path';
+const DND_TYPE = DND_MIME;
 
 // 每页条数按视图分开:列表一行一个,50 行一屏滚两下就到底;
 // 缩略图是 2-4 列的网格,24 个正好铺满 6 行且不留半行空白
@@ -63,12 +77,51 @@ const FOLDER_EMOJIS = [
     '✈️', '📷', '🎨', '🏫', '👶', '🐾', '🔒', '🗃️',
 ];
 
-function Breadcrumb({ path }: { path: string }) {
+/** 面包屑:每一段都能接住拖过来的文件,往上层挪不用先切目录 */
+function Breadcrumb({
+    path,
+    onDropMove,
+}: {
+    path: string;
+    onDropMove: (paths: string[], dest: string) => void;
+}) {
     const parts = path === '' ? [] : path.split('/');
-    let acc = '';
+    const dragging = useDragPayload();
+    const [over, setOver] = useState<string | null>(null);
     // 第一段是 @挂载名时,整条路径都属于那个外部存储——用不同颜色标出来,
     // 免得在两个存储之间来回切时看错地方
     const inMount = parts.length > 0 && parts[0].startsWith('@');
+
+    const dropProps = (dest: string) => {
+        const droppable = dragging !== null && canDrop(dest, dragging);
+        return {
+            active: droppable && over === dest,
+            handlers: {
+                onDragOver: (e: React.DragEvent) => {
+                    if (!dragging) return;
+                    if (!droppable) {
+                        e.dataTransfer.dropEffect = 'none';
+                        return;
+                    }
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = 'move';
+                    setOver(dest);
+                },
+                onDragLeave: () => setOver((cur) => (cur === dest ? null : cur)),
+                onDrop: (e: React.DragEvent) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setOver(null);
+                    if (!droppable) return;
+                    const paths = readPaths(e.dataTransfer);
+                    if (paths.length > 0) onDropMove(paths, dest);
+                },
+            },
+        };
+    };
+
+    const root = dropProps('');
     return (
         <div
             className={cn(
@@ -85,24 +138,32 @@ function Breadcrumb({ path }: { path: string }) {
             )}
             <Link
                 className={cn(
-                    'font-bold inline-flex items-center gap-1 align-middle',
+                    'font-bold inline-flex items-center gap-1 align-middle rounded px-1 -mx-1',
                     inMount ? 'text-sky-700 dark:text-sky-300' : 'text-leaf-dark',
+                    root.active && 'bg-leaf-soft outline-2 outline-dashed outline-leaf',
                 )}
                 to="/files"
+                // 面包屑是落点不是拖手,别让浏览器把它当链接拖起来
+                draggable={false}
+                {...root.handlers}
             >
                 <Home className="size-3.5" /> 根目录
             </Link>
             {parts.map((p, i) => {
-                acc += (i === 0 ? '' : '/') + p;
+                const acc = parts.slice(0, i + 1).join('/');
+                const d = dropProps(acc);
                 return (
                     <span key={acc}>
                         {' / '}
                         <Link
                             className={cn(
-                                'font-bold',
+                                'font-bold rounded px-1 -mx-1',
                                 inMount ? 'text-sky-700 dark:text-sky-300' : 'text-leaf-dark',
+                                d.active && 'bg-leaf-soft outline-2 outline-dashed outline-leaf',
                             )}
                             to={`/files/${acc}`}
+                            draggable={false}
+                            {...d.handlers}
                         >
                             {p}
                         </Link>
@@ -180,6 +241,10 @@ export default function Files() {
     const [view, setView] = useState<ViewMode>(
         () => (localStorage.getItem('pd_view') as ViewMode) || 'list',
     );
+    // 触屏没有 hover,复选框不能藏在图标底下,得单独占一格常驻显示
+    const [coarse] = useState(
+        () => typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches,
+    );
     const [treeVersion, setTreeVersion] = useState(0);
     const [icons, setIcons] = useState<Record<string, string>>({});
     const [policies, setPolicies] = useState<StoragePolicy[]>([]);
@@ -190,10 +255,19 @@ export default function Files() {
     const [noteName, setNoteName] = useState('');
     const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null);
     const [renameName, setRenameName] = useState('');
-    const [moveTarget, setMoveTarget] = useState<FileEntry | null>(null);
-    const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
+    // 移动/删除/压缩都可能针对一批选中的项,统一存一组名字(空数组 = 对话框关着)
+    const [moveNames, setMoveNames] = useState<string[]>([]);
+    const [deleteNames, setDeleteNames] = useState<string[]>([]);
     const [iconTarget, setIconTarget] = useState<FileEntry | null>(null);
     const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+
+    // 多选:存当前目录下的名字。换目录、刷新列表都会清空
+    const [selected, setSelected] = useState<Set<string>>(new Set());
+    // Shift 连选的锚点(上一次单独点中的行号)
+    const anchor = useRef<number | null>(null);
+    // 正在移动的项:先淡出,等接口回来再整体刷新,不会突然消失一格
+    const [moving, setMoving] = useState<Set<string>>(new Set());
+    const dragging = useDragPayload();
 
     const [shareTarget, setShareTarget] = useState<FileEntry | null>(null);
     const [sharePass, setSharePass] = useState('');
@@ -205,7 +279,7 @@ export default function Files() {
     const [dropTarget, setDropTarget] = useState<string | null>(null);
 
     // 压缩/解压:异步任务,起完轮询进度
-    const [compressTarget, setCompressTarget] = useState<FileEntry | null>(null);
+    const [compressNames, setCompressNames] = useState<string[]>([]);
     const [compressName, setCompressName] = useState('');
     const [compressFormat, setCompressFormat] = useState('zip');
     const [extractTarget, setExtractTarget] = useState<FileEntry | null>(null);
@@ -220,12 +294,23 @@ export default function Files() {
     const load = useCallback(() => {
         setLoading(true);
         api.listFiles(path)
-            .then((r) => setEntries(r.entries))
+            .then((r) => {
+                setEntries(r.entries);
+                // 列表变了(移走、删掉、传完),把已经不在的项从选择里剔除
+                const names = new Set(r.entries.map((e) => e.name));
+                setSelected((prev) => {
+                    const next = new Set([...prev].filter((n) => names.has(n)));
+                    return next.size === prev.size ? prev : next;
+                });
+            })
             .catch((e) => {
                 toast.error(e instanceof Error ? e.message : '加载失败');
                 setEntries([]);
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                setLoading(false);
+                setMoving((prev) => (prev.size === 0 ? prev : new Set()));
+            });
         setTreeVersion((v) => v + 1);
     }, [path]);
 
@@ -244,6 +329,33 @@ export default function Files() {
 
     // 换目录、换视图都回到第一页,否则会停在一个空页上
     useEffect(() => setPage(1), [path, view]);
+
+    // 换目录后原来的选择没有意义了
+    useEffect(() => {
+        setSelected(new Set());
+        anchor.current = null;
+    }, [path]);
+
+    // Esc 取消选择,Ctrl/⌘+A 全选(在输入框里打字时不抢)
+    useEffect(() => {
+        const onKey = (ev: KeyboardEvent) => {
+            const t = ev.target as HTMLElement | null;
+            if (
+                t &&
+                (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+            ) {
+                return;
+            }
+            if (ev.key === 'Escape') {
+                setSelected((prev) => (prev.size === 0 ? prev : new Set()));
+            } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'a') {
+                ev.preventDefault();
+                setSelected(new Set(entries.map((e) => e.name)));
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [entries]);
 
     const join = (name: string) => (path === '' ? name : `${path}/${name}`);
 
@@ -287,15 +399,19 @@ export default function Files() {
     );
 
     const doCompress = async () => {
-        if (!compressTarget) return;
+        if (compressNames.length === 0) return;
         const name = compressName.trim();
         if (!name) {
             toast.warning('请填写压缩包名称');
             return;
         }
         try {
-            const r = await api.compress([join(compressTarget.name)], join(name), compressFormat);
-            setCompressTarget(null);
+            const r = await api.compress(
+                compressNames.map((n) => join(n)),
+                join(name),
+                compressFormat,
+            );
+            setCompressNames([]);
             setArchiveTask(r.task);
             pollArchive(r.task.id);
         } catch (e) {
@@ -343,13 +459,86 @@ export default function Files() {
         }
     };
 
-    const doMoveTo = (src: string, destDir: string) =>
-        run(async () => {
-            await api.move(src, destDir);
-            const base = src.includes('/') ? src.slice(src.lastIndexOf('/') + 1) : src;
-            await migrateIcon(src, destDir === '' ? base : `${destDir}/${base}`);
-            toast.success('已移动');
-        });
+    // ---- 移动:拖拽和「移动到…」走的是同一条路 ----
+
+    const destLabel = (dest: string) => (dest === '' ? '根目录' : baseOf(dest));
+
+    /** 撤销一次移动:照原路把每一项送回去 */
+    const undoMove = async (moved: string[], dest: string) => {
+        let ok = 0;
+        for (const src of moved) {
+            const now = dest === '' ? baseOf(src) : `${dest}/${baseOf(src)}`;
+            try {
+                await api.move(now, parentOf(src));
+                await migrateIcon(now, src);
+                ok++;
+            } catch {
+                // 那边已经被改过名或再次移动,放不回去就算了
+            }
+        }
+        load();
+        if (ok > 0) toast.success(`已放回 ${ok} 项`);
+        else toast.error('放不回去了,东西可能已经被改名或再次移动');
+    };
+
+    /**
+     * 把一批路径移进 dest。后端一次只收一个,这里挨个发。
+     * 目标里已有同名的先挑出来跳过,不然会撞上一个看不懂的 rename 报错;
+     * 移完只弹一条 toast,带「撤销」——拖歪了一下就能放回去。
+     */
+    const moveMany = async (paths: string[], dest: string) => {
+        const list = paths.filter(
+            (p) => p !== '' && p !== dest && parentOf(p) !== dest && !dest.startsWith(`${p}/`),
+        );
+        if (list.length === 0) return;
+        if (list.some((p) => storeOf(p) !== storeOf(dest))) {
+            toast.warning('暂不支持跨存储移动,请下载后再上传到目标存储');
+            return;
+        }
+
+        let taken = new Set<string>();
+        try {
+            const r = await api.listFiles(dest);
+            taken = new Set(r.entries.map((e) => e.name));
+        } catch {
+            // 目标目录读不到就直接发请求,让后端去判
+        }
+        const dup = list.filter((p) => taken.has(baseOf(p)));
+        const todo = list.filter((p) => !taken.has(baseOf(p)));
+        if (todo.length === 0) {
+            toast.warning(
+                `「${destLabel(dest)}」里已经有同名的${dup.length > 1 ? `${dup.length} 项` : `「${baseOf(dup[0])}」`},没有移动`,
+            );
+            return;
+        }
+
+        // 先让这几行淡下去,等接口回来再整体刷新
+        setMoving(new Set(todo.map(baseOf)));
+        const done: string[] = [];
+        let firstErr = '';
+        for (const src of todo) {
+            try {
+                await api.move(src, dest);
+                await migrateIcon(src, dest === '' ? baseOf(src) : `${dest}/${baseOf(src)}`);
+                done.push(src);
+            } catch (e) {
+                if (!firstErr) firstErr = e instanceof Error ? e.message : '移动失败';
+            }
+        }
+        load();
+        setSelected(new Set());
+
+        if (done.length > 0) {
+            const what =
+                done.length === 1 ? `「${baseOf(done[0])}」` : `${done.length} 项`;
+            toast.success(`已把 ${what} 移到「${destLabel(dest)}」`, {
+                duration: 7000,
+                action: { label: '撤销', onClick: () => void undoMove(done, dest) },
+            });
+        }
+        if (dup.length > 0) toast.warning(`${dup.length} 项因目标已有同名而跳过`);
+        if (firstErr) toast.error(`${todo.length - done.length} 项没能移动:${firstErr}`);
+    };
 
     const doShare = async () => {
         if (!shareTarget) return;
@@ -401,28 +590,105 @@ export default function Files() {
         );
     };
 
-    // ---- 行内拖拽移动 ----
-    const onRowDragStart = (e: React.DragEvent, entry: FileEntry) => {
-        e.dataTransfer.setData(DND_TYPE, join(entry.name));
-        e.dataTransfer.effectAllowed = 'move';
+    // ---- 多选 ----
+
+    // 保持列表里的先后顺序,批量操作时提示语读起来才对得上
+    const selectedNames = entries.filter((e) => selected.has(e.name)).map((e) => e.name);
+
+    const toggleSelect = (name: string, idx: number) => {
+        anchor.current = idx;
+        setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(name)) next.delete(name);
+            else next.add(name);
+            return next;
+        });
     };
-    const onFolderDrop = (e: React.DragEvent, folder: FileEntry) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDropTarget(null);
-        setDragOver(false);
-        const src = e.dataTransfer.getData(DND_TYPE);
-        if (!src) return;
-        const dest = join(folder.name);
-        if (src === dest) return;
-        // 跨存储拖拽:后端不支持,前端直接拦下给出提示
-        const srcMount = src.startsWith('@') ? src.split('/')[0] : '';
-        const destMount = dest.startsWith('@') ? dest.split('/')[0] : '';
-        if (srcMount !== destMount) {
-            toast.warning('暂不支持跨存储移动,请下载后再上传到目标存储');
+
+    /** 点名字:普通=打开,Ctrl/⌘ 点=加选一项,Shift 点=连选一段 */
+    const onEntryClick = (ev: React.MouseEvent, e: FileEntry, idx: number) => {
+        if (ev.shiftKey && anchor.current !== null) {
+            ev.preventDefault();
+            const from = Math.min(anchor.current, idx);
+            const to = Math.max(anchor.current, idx);
+            setSelected(new Set(entries.slice(from, to + 1).map((x) => x.name)));
             return;
         }
-        doMoveTo(src, dest);
+        if (ev.ctrlKey || ev.metaKey) {
+            ev.preventDefault();
+            toggleSelect(e.name, idx);
+            return;
+        }
+        openEntry(e, idx);
+    };
+
+    // ---- 拖拽移动 ----
+
+    /**
+     * 一次拖走哪些:拖的是已选中的项就整批走,否则只走手底下这一个,
+     * 并把选择切成它——松手后高亮的正好是刚拖走的东西(和资源管理器一致)。
+     */
+    const onRowDragStart = (ev: React.DragEvent, entry: FileEntry) => {
+        const batch =
+            selected.has(entry.name) && selected.size > 1
+                ? selectedNames.filter((n) => !(path === '' && n.startsWith('@')))
+                : [entry.name];
+        if (batch.length === 0) return;
+        const paths = batch.map((n) => join(n));
+        ev.dataTransfer.setData(DND_TYPE, JSON.stringify(paths));
+        ev.dataTransfer.effectAllowed = 'move';
+        startDrag({ paths, store: mountName, label: batch[0] });
+        setDragImage(
+            ev.dataTransfer,
+            batch[0],
+            batch.length,
+            batch.length > 1 ? '🗂️' : entry.dir ? '📁' : '📄',
+        );
+        if (!selected.has(entry.name)) setSelected(new Set([entry.name]));
+    };
+
+    const onRowDragEnd = () => {
+        endDrag();
+        setDropTarget(null);
+    };
+
+    const onFolderDrop = (ev: React.DragEvent, folder: FileEntry) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setDropTarget(null);
+        setDragOver(false);
+        const paths = readPaths(ev.dataTransfer);
+        if (paths.length > 0) void moveMany(paths, join(folder.name));
+    };
+
+    /** 文件夹作为落点的那套事件 + 状态,列表和缩略图共用 */
+    const folderDrop = (entry: FileEntry) => {
+        const droppable =
+            entry.dir && dragging !== null && canDrop(join(entry.name), dragging);
+        const rejectWhy =
+            entry.dir && dragging !== null ? dropReject(join(entry.name), dragging) : null;
+        return {
+            droppable,
+            active: droppable && dropTarget === entry.name,
+            rejectWhy,
+            handlers: {
+                onDragOver: (ev: React.DragEvent) => {
+                    if (!dragging) return;
+                    if (!droppable) {
+                        // 不 preventDefault:鼠标直接变成禁止圈,不用等松手才知道
+                        ev.dataTransfer.dropEffect = 'none';
+                        return;
+                    }
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    ev.dataTransfer.dropEffect = 'move';
+                    if (dropTarget !== entry.name) setDropTarget(entry.name);
+                },
+                onDragLeave: () =>
+                    setDropTarget((cur) => (cur === entry.name ? null : cur)),
+                onDrop: (ev: React.DragEvent) => droppable && onFolderDrop(ev, entry),
+            },
+        };
     };
 
     const entryIcon = (e: FileEntry) => {
@@ -439,6 +705,63 @@ export default function Files() {
         );
     };
 
+    const selectBox = (e: FileEntry, idx: number, on: boolean) => (
+        <span
+            role="checkbox"
+            aria-checked={on}
+            aria-label={`选择 ${e.name}`}
+            title="选择(也可以按住 Ctrl/⌘ 点名字)"
+            onClick={(ev) => {
+                ev.stopPropagation();
+                toggleSelect(e.name, idx);
+            }}
+            className={cn(
+                'size-[18px] rounded-[6px] border flex items-center justify-center cursor-pointer shrink-0',
+                on
+                    ? 'bg-leaf border-leaf text-white'
+                    : 'bg-paper/90 border-line hover:border-leaf',
+            )}
+        >
+            {on && <Check className="size-3 stroke-[3.5]" />}
+        </span>
+    );
+
+    /**
+     * 列表行最左边那一格:桌面上复选框藏在图标底下,鼠标扫过或已选中才浮出来,
+     * 平时一行还是干干净净的图标;触屏没有 hover,就让它单独占一格常驻。
+     */
+    const iconCell = (e: FileEntry, idx: number) => {
+        const on = selected.has(e.name);
+        if (coarse) {
+            return (
+                <>
+                    {selectBox(e, idx, on)}
+                    {entryIcon(e)}
+                </>
+            );
+        }
+        return (
+            <span className="relative size-[18px] shrink-0">
+                <span
+                    className={cn(
+                        'absolute inset-0 flex items-center justify-center transition-opacity',
+                        on ? 'opacity-0' : 'group-hover/row:opacity-0',
+                    )}
+                >
+                    {entryIcon(e)}
+                </span>
+                <span
+                    className={cn(
+                        'absolute inset-0 flex items-center justify-center transition-opacity',
+                        on ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100',
+                    )}
+                >
+                    {selectBox(e, idx, on)}
+                </span>
+            </span>
+        );
+    };
+
     // 根目录里的 @挂载点是策略的化身:只能打开,管理去「存储策略」页
     const isMountRoot = (e: FileEntry) => path === '' && e.dir && e.name.startsWith('@');
 
@@ -447,6 +770,27 @@ export default function Files() {
     const rowActions = (e: FileEntry): RowAction[] => {
         if (isMountRoot(e)) {
             return [{ label: '管理存储策略', run: () => navigate('/storage') }];
+        }
+        // 右键点在选中的一批上:菜单整批生效,不用为了删 10 个点 10 次
+        if (selected.size > 1 && selected.has(e.name)) {
+            const n = selected.size;
+            return [
+                { label: `移动这 ${n} 项到…`, run: () => setMoveNames(selectedNames) },
+                {
+                    label: `压缩这 ${n} 项`,
+                    run: () => {
+                        setCompressNames(selectedNames);
+                        setCompressName(`${path === '' ? '打包' : baseOf(path)}.zip`);
+                        setCompressFormat('zip');
+                    },
+                },
+                {
+                    label: `删除这 ${n} 项`,
+                    run: () => setDeleteNames(selectedNames),
+                    danger: true,
+                    sepBefore: true,
+                },
+            ];
         }
         const list: RowAction[] = [];
         if (e.dir) {
@@ -461,11 +805,11 @@ export default function Files() {
                 setRenameName(e.name);
             },
         });
-        list.push({ label: '移动到…', run: () => setMoveTarget(e) });
+        list.push({ label: '移动到…', run: () => setMoveNames([e.name]) });
         list.push({
             label: '压缩为…',
             run: () => {
-                setCompressTarget(e);
+                setCompressNames([e.name]);
                 setCompressName(`${e.name}.zip`);
                 setCompressFormat('zip');
             },
@@ -476,7 +820,7 @@ export default function Files() {
         }
         list.push({
             label: '删除',
-            run: () => setDeleteTarget(e),
+            run: () => setDeleteNames([e.name]),
             danger: true,
             sepBefore: true,
         });
@@ -490,6 +834,8 @@ export default function Files() {
                     href={api.downloadUrl(join(e.name), true)}
                     download={e.name}
                     title="下载"
+                    // 否则从这里起手拖的是链接本身,不是这一行文件
+                    draggable={false}
                 >
                     <Button variant="ghost" size="icon-sm" aria-label="下载">
                         <Download className="size-3.5" />
@@ -519,14 +865,17 @@ export default function Files() {
     return (
         <div
             onDragOver={(e) => {
+                // 只接从桌面拖进来的文件;网盘内部的拖拽落在空白处不该显示「可以放」
+                if (!e.dataTransfer.types.includes('Files')) return;
                 e.preventDefault();
-                if (e.dataTransfer.types.includes('Files')) setDragOver(true);
+                setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
             onDrop={(e) => {
+                if (!e.dataTransfer.types.includes('Files')) return;
                 e.preventDefault();
                 setDragOver(false);
-                if (e.dataTransfer.types.includes('Files')) onUpload(e.dataTransfer.files);
+                onUpload(e.dataTransfer.files);
             }}
         >
             <div className="flex items-center gap-3 flex-wrap mb-3">
@@ -617,7 +966,46 @@ export default function Files() {
                 </div>
             </div>
 
-            <Breadcrumb path={path} />
+            <Breadcrumb path={path} onDropMove={(paths, dest) => void moveMany(paths, dest)} />
+
+            {/* 选中一批之后浮出来的操作条 */}
+            {selected.size > 0 && (
+                <Card className="mb-3 py-2 px-3 flex items-center gap-2 flex-wrap sticky top-16 z-20 border-leaf/60 shadow-md">
+                    <span className="text-sm font-bold">
+                        已选 {selected.size} 项
+                        <span className="font-normal text-ink-soft text-xs ml-2 hidden sm:inline">
+                            可整批拖到左边目录树
+                        </span>
+                    </span>
+                    <div className="ml-auto flex gap-1.5 flex-wrap">
+                        <Button size="sm" onClick={() => setMoveNames(selectedNames)}>
+                            移动到…
+                        </Button>
+                        <Button
+                            size="sm"
+                            onClick={() => {
+                                setCompressNames(selectedNames);
+                                setCompressName(
+                                    `${path === '' ? '打包' : baseOf(path)}.zip`,
+                                );
+                                setCompressFormat('zip');
+                            }}
+                        >
+                            压缩
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => setDeleteNames(selectedNames)}
+                        >
+                            删除
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                            取消
+                        </Button>
+                    </div>
+                </Card>
+            )}
 
             {archiveTask && (
                 <Card className="mb-3 py-3">
@@ -654,6 +1042,7 @@ export default function Files() {
                     refreshKey={treeVersion}
                     icons={icons}
                     onNavigate={(p) => navigate(`/files/${p}`)}
+                    onDropMove={(paths, dest) => void moveMany(paths, dest)}
                 />
 
                 <div className="flex-1 min-w-0">
@@ -675,45 +1064,41 @@ export default function Files() {
                             <div>
                                 {shown.map((e, i) => {
                                     const idx = pageStart + i;
+                                    const on = selected.has(e.name);
+                                    const drop = folderDrop(e);
                                     return (
                                     <ContextMenu key={e.name}>
                                         <ContextMenuTrigger asChild>
                                             <div
-                                                draggable
+                                                draggable={!isMountRoot(e)}
                                                 onDragStart={(ev) => onRowDragStart(ev, e)}
-                                                onDragOver={(ev) => {
-                                                    if (
-                                                        e.dir &&
-                                                        ev.dataTransfer.types.includes(
-                                                            DND_TYPE,
-                                                        )
-                                                    ) {
-                                                        ev.preventDefault();
-                                                        ev.stopPropagation();
-                                                        setDropTarget(e.name);
-                                                    }
-                                                }}
-                                                onDragLeave={() =>
-                                                    dropTarget === e.name &&
-                                                    setDropTarget(null)
-                                                }
-                                                onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
+                                                onDragEnd={onRowDragEnd}
+                                                {...drop.handlers}
+                                                title={drop.rejectWhy ?? undefined}
                                                 className={cn(
-                                                    'flex items-center gap-2.5 px-3 py-1.5 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 flex-wrap',
-                                                    dropTarget === e.name &&
+                                                    'group/row flex items-center gap-2.5 px-3 py-1.5 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 flex-wrap select-none transition-opacity',
+                                                    on && 'bg-leaf-soft/60',
+                                                    drop.active &&
                                                         'bg-leaf-soft outline-2 outline-dashed outline-leaf -outline-offset-2',
+                                                    // 拖着东西路过放不进去的文件夹时压暗一点
+                                                    dragging !== null &&
+                                                        e.dir &&
+                                                        !drop.droppable &&
+                                                        'opacity-45',
+                                                    moving.has(e.name) &&
+                                                        'opacity-40 pointer-events-none',
                                                 )}
                                             >
+                                                {iconCell(e, idx)}
                                                 <button
                                                     className="flex items-center gap-2 flex-1 min-w-0 basis-full sm:basis-auto font-bold text-left cursor-pointer truncate"
-                                                    onClick={() => openEntry(e, idx)}
+                                                    onClick={(ev) => onEntryClick(ev, e, idx)}
                                                     title={
                                                         e.dir
                                                             ? `${e.name}(可把文件拖进来)`
                                                             : e.name
                                                     }
                                                 >
-                                                    {entryIcon(e)}
                                                     <span className="truncate">{e.name}</span>
                                                 </button>
                                                 <span className="text-xs text-ink-soft w-20 text-right hidden sm:block shrink-0">
@@ -746,38 +1131,42 @@ export default function Files() {
                             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 p-3">
                                 {shown.map((e, i) => {
                                     const idx = pageStart + i;
+                                    const on = selected.has(e.name);
+                                    const drop = folderDrop(e);
                                     return (
                                     <ContextMenu key={e.name}>
                                         <ContextMenuTrigger asChild>
                                             <div
-                                                draggable
+                                                draggable={!isMountRoot(e)}
                                                 onDragStart={(ev) => onRowDragStart(ev, e)}
-                                                onDragOver={(ev) => {
-                                                    if (
-                                                        e.dir &&
-                                                        ev.dataTransfer.types.includes(
-                                                            DND_TYPE,
-                                                        )
-                                                    ) {
-                                                        ev.preventDefault();
-                                                        ev.stopPropagation();
-                                                        setDropTarget(e.name);
-                                                    }
-                                                }}
-                                                onDragLeave={() =>
-                                                    dropTarget === e.name &&
-                                                    setDropTarget(null)
-                                                }
-                                                onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
+                                                onDragEnd={onRowDragEnd}
+                                                {...drop.handlers}
+                                                title={drop.rejectWhy ?? undefined}
                                                 className={cn(
-                                                    'rounded-lg border border-line/70 overflow-hidden bg-paper flex flex-col',
-                                                    dropTarget === e.name &&
-                                                        'border-leaf bg-leaf-soft',
+                                                    'group/card relative rounded-lg border border-line/70 overflow-hidden bg-paper flex flex-col select-none transition-opacity',
+                                                    on && 'border-leaf ring-2 ring-leaf/40',
+                                                    drop.active && 'border-leaf bg-leaf-soft',
+                                                    dragging !== null &&
+                                                        e.dir &&
+                                                        !drop.droppable &&
+                                                        'opacity-45',
+                                                    moving.has(e.name) &&
+                                                        'opacity-40 pointer-events-none',
                                                 )}
                                             >
+                                                <span
+                                                    className={cn(
+                                                        'absolute left-1.5 top-1.5 z-10 transition-opacity',
+                                                        on || coarse
+                                                            ? 'opacity-100'
+                                                            : 'opacity-0 group-hover/card:opacity-100',
+                                                    )}
+                                                >
+                                                    {selectBox(e, idx, on)}
+                                                </span>
                                                 <button
                                                     className="cursor-pointer text-left"
-                                                    onClick={() => openEntry(e, idx)}
+                                                    onClick={(ev) => onEntryClick(ev, e, idx)}
                                                     title={e.name}
                                                 >
                                                     <Thumb
@@ -847,8 +1236,9 @@ export default function Files() {
                         </div>
                     )}
                     <p className="text-xs text-ink-soft mt-2">
-                        拖拽文件行到文件夹(或左侧目录树同名文件夹)可移动;拖拽本地文件到列表上传;超过
-                        64MB 自动分片上传
+                        把文件拖到左侧目录树或列表里的文件夹上就能移动,拖着悬停一会儿会自动展开子目录;
+                        Ctrl/⌘ 点或 Shift 点名字可以多选,选中后整批一起拖。
+                        从桌面拖文件进来是上传,超过 64MB 自动分片
                     </p>
                 </div>
             </div>
@@ -924,12 +1314,21 @@ export default function Files() {
 
             {/* 移动:目录选择器(挂载内移动锁定在同一存储;本机隐藏挂载点) */}
             <FolderPicker
-                open={moveTarget !== null}
-                title={`移动「${moveTarget?.name ?? ''}」到…`}
+                open={moveNames.length > 0}
+                title={
+                    moveNames.length === 1
+                        ? `移动「${moveNames[0]}」到…`
+                        : `移动 ${moveNames.length} 项到…`
+                }
                 rootPath={mountName}
                 hideMounts={!inMount}
-                onClose={() => setMoveTarget(null)}
-                onSelect={(dir) => moveTarget && doMoveTo(join(moveTarget.name), dir)}
+                onClose={() => setMoveNames([])}
+                onSelect={(dir) =>
+                    void moveMany(
+                        moveNames.map((n) => join(n)),
+                        dir,
+                    )
+                }
             />
 
             {/* 文件夹图标 */}
@@ -977,10 +1376,16 @@ export default function Files() {
 
             {/* 压缩 */}
             <Dialog
-                open={compressTarget !== null}
-                onOpenChange={(o) => !o && setCompressTarget(null)}
+                open={compressNames.length > 0}
+                onOpenChange={(o) => !o && setCompressNames([])}
             >
-                <DialogContent title={`压缩「${compressTarget?.name ?? ''}」`}>
+                <DialogContent
+                    title={
+                        compressNames.length === 1
+                            ? `压缩「${compressNames[0]}」`
+                            : `压缩选中的 ${compressNames.length} 项`
+                    }
+                >
                     <div className="flex flex-col gap-3">
                         <div>
                             <label className="block text-xs font-bold text-ink-soft mb-1">
@@ -992,7 +1397,7 @@ export default function Files() {
                                     const f = e.target.value;
                                     setCompressFormat(f);
                                     // 扩展名跟着格式走,省得自己改
-                                    const base = (compressTarget?.name ?? '').replace(
+                                    const base = compressName.replace(
                                         /\.(zip|tar\.gz)$/i,
                                         '',
                                     );
@@ -1038,20 +1443,26 @@ export default function Files() {
 
             {/* 删除(本机进回收站;外部存储直接永久删除) */}
             <Dialog
-                open={deleteTarget !== null}
-                onOpenChange={(o) => !o && setDeleteTarget(null)}
+                open={deleteNames.length > 0}
+                onOpenChange={(o) => !o && setDeleteNames([])}
             >
                 <DialogContent title={inMount ? '永久删除' : '放进垃圾桶'}>
                     <p className="text-sm">
                         {inMount ? (
                             <>
-                                外部存储不经回收站,「{deleteTarget?.name}」将
-                                <b>直接从存储桶永久删除</b>,无法找回。确定吗?
+                                外部存储不经回收站,
+                                {deleteNames.length === 1
+                                    ? `「${deleteNames[0]}」`
+                                    : `选中的 ${deleteNames.length} 项`}
+                                将<b>直接从存储桶永久删除</b>,无法找回。确定吗?
                             </>
                         ) : (
                             <>
-                                把「{deleteTarget?.name}」放进垃圾桶?30
-                                天内可以在垃圾桶里找回, 30 天后自动清理。
+                                把
+                                {deleteNames.length === 1
+                                    ? `「${deleteNames[0]}」`
+                                    : `选中的 ${deleteNames.length} 项`}
+                                放进垃圾桶?30 天内可以在垃圾桶里找回, 30 天后自动清理。
                             </>
                         )}
                     </p>
@@ -1059,10 +1470,13 @@ export default function Files() {
                         okText={inMount ? '永久删除' : '放进垃圾桶'}
                         okDanger
                         onOk={() =>
-                            deleteTarget &&
+                            deleteNames.length > 0 &&
                             run(
-                                () => api.remove([join(deleteTarget.name)]),
-                                () => setDeleteTarget(null),
+                                () => api.remove(deleteNames.map((n) => join(n))),
+                                () => {
+                                    setDeleteNames([]);
+                                    setSelected(new Set());
+                                },
                             )
                         }
                     />

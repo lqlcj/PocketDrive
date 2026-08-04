@@ -1,21 +1,25 @@
-// Package components 管理 PocketDrive 依赖的三个外部程序:
-// yt-dlp、aria2c、ffmpeg。
+// Package components 汇报 PocketDrive 依赖的三个外部程序(yt-dlp、
+// aria2、ffmpeg)的状态,并负责其中可托管者的安装升级。
 //
-// 它们全部装在 /config/bin(volume 内)而不是镜像里,原因是镜像里的
-// 文件一重启就回到出厂状态——用户在网页上点的「更新」会白点。装在
-// volume 里之后,三个组件都能在网页里独立升级并一直保留。
+// 三者的升级渠道是有意分开的:
 //
-// 首次启动时,如果 volume 里还没有,就从镜像内置的副本复制过去(见
-// EnsureBundled);镜像没内置的则按需从上游下载。
+//	yt-dlp   装在 /config/bin(volume 内),网页里点一下就升级,结果
+//	         跨容器重启保留。它一年发上百个版本,视频站点一改规则就
+//	         得跟,跟着镜像走太慢。
+//	aria2    跑在自己的容器里(compose 的 aria2 服务),版本通过它的
+//	         RPC 查,升级靠 docker compose pull。
+//	ffmpeg   随 PocketDrive 主镜像发布(Alpine 官方包),升级同样靠
+//	         docker compose pull。
 //
-// 本机开发(Windows/macOS)不下载任何东西:BinDir 为空时一律回退到
+// 于是「下载二进制」这套逻辑只对 yt-dlp 存在,这个包里也只有它一份
+// 安装代码:依赖第三方 release 的资产命名是有长期代价的(上游改个名
+// 字,更新按钮就坏了),能少一处是一处。
+//
+// 本机开发(Windows/macOS)不下载任何东西:binDir 为空时一律回退到
 // PATH 里的同名程序。
 package components
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,41 +28,55 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ulikunitz/xz"
 )
 
-// Kind 是组件标识,同时也是 /config/bin 下的文件名。
+// Kind 是组件标识。yt-dlp 和 ffmpeg 的取值同时也是可执行文件名。
 type Kind string
 
 const (
 	Ytdlp  Kind = "yt-dlp"
-	Aria2  Kind = "aria2c"
+	Aria2  Kind = "aria2"
 	FFmpeg Kind = "ffmpeg"
+)
+
+// Channel 是组件的升级渠道,决定网页上能对它做什么。
+type Channel string
+
+const (
+	// ChanManaged:装在 volume 里,网页里点一下就能升级。
+	ChanManaged Channel = "managed"
+	// ChanImage:随 PocketDrive 主镜像发布。
+	ChanImage Channel = "image"
+	// ChanSidecar:跑在自己的容器里。
+	ChanSidecar Channel = "sidecar"
+	// ChanSystem:本机开发,版本取决于用户 PATH 里装了什么。
+	ChanSystem Channel = "system"
 )
 
 const (
 	downloadTimeout = 10 * time.Minute
-	maxDownload     = 200 << 20 // 单个组件最大 200MB,防止下到意外的大文件
 	versionTTL      = 10 * time.Minute
 	latestTTL       = time.Hour // GitHub 未认证接口每小时 60 次,查勤了会被限流
 )
 
+// yt-dlp 的独立二进制现在 35MB 上下,给到 100MB 已经很宽松;撞上这个
+// 数说明下到的不是它。是变量只为让测试能调小。
+var maxDownload int64 = 100 << 20
+
 // Info 是一个组件对外呈现的状态。
 type Info struct {
-	Kind      Kind   `json:"kind"`
-	Installed bool   `json:"installed"`
-	Version   string `json:"version"`
-	Latest    string `json:"latest"`   // 上游最新版;查不到时为空
-	Outdated  bool   `json:"outdated"` // 能比较且确实旧了
-	Managed   bool   `json:"managed"`  // 装在 volume 里、可在网页升级
-	Path      string `json:"path"`
+	Kind      Kind    `json:"kind"`
+	Installed bool    `json:"installed"`
+	Version   string  `json:"version"`
+	Latest    string  `json:"latest"`   // 上游最新版;只有托管组件才查
+	Outdated  bool    `json:"outdated"` // 能比较且确实旧了
+	Channel   Channel `json:"channel"`
+	Path      string  `json:"path"`
 }
 
 type cached struct {
@@ -86,17 +104,37 @@ func New(binDir, bundledDir string) *Manager {
 	}
 }
 
-// Path 返回组件的可执行文件路径。托管模式下即 /config/bin/<name>,
-// 否则回退到裸名字(由 PATH 解析)。
-func (m *Manager) Path(k Kind) string {
+// Channel 报告组件的升级渠道。官方镜像一定会设 POCKETDRIVE_BIN_DIR,
+// 所以没设就说明是本机开发,一切都看用户自己的 PATH。
+func (m *Manager) Channel(k Kind) Channel {
 	if m.binDir == "" {
-		return exeName(string(k))
+		return ChanSystem
 	}
-	return filepath.Join(m.binDir, exeName(string(k)))
+	switch k {
+	case Ytdlp:
+		return ChanManaged
+	case Aria2:
+		return ChanSidecar
+	default:
+		return ChanImage
+	}
 }
 
-// Managed 报告组件是否由本程序托管(即能不能在网页里升级)。
-func (m *Manager) Managed() bool { return m.binDir != "" }
+// Managed 报告组件能不能在网页里升级。
+func (m *Manager) Managed(k Kind) bool { return m.Channel(k) == ChanManaged }
+
+// Path 返回组件的可执行文件路径。只有托管的 yt-dlp 在 volume 里,
+// 其余交给 PATH 解析;aria2 压根不在本容器内,没有路径可言。
+func (m *Manager) Path(k Kind) string {
+	switch {
+	case k == Aria2:
+		return ""
+	case k == Ytdlp && m.binDir != "":
+		return filepath.Join(m.binDir, exeName(string(k)))
+	default:
+		return exeName(string(k))
+	}
+}
 
 func exeName(n string) string {
 	if runtime.GOOS == "windows" {
@@ -112,6 +150,9 @@ func (m *Manager) EnsureBundled(kinds ...Kind) {
 		return
 	}
 	for _, k := range kinds {
+		if !m.Managed(k) {
+			continue
+		}
 		dst := m.Path(k)
 		if _, err := os.Stat(dst); err == nil {
 			continue
@@ -149,6 +190,12 @@ func writeExecutable(dst string, r io.Reader) error {
 		os.Remove(tmp)
 		return errors.New("下载到的文件是空的")
 	}
+	// 撞到上限说明下错了东西:LimitReader 是干净地读完的,io.Copy 不
+	// 会报错,再往下走就会留下一个「能启动但缺后半截」的二进制
+	if n >= maxDownload {
+		os.Remove(tmp)
+		return fmt.Errorf("下载内容超过 %d MB,已中止", maxDownload>>20)
+	}
 	// Windows 上目标被占用时改名会失败,先把旧的挪开
 	if runtime.GOOS == "windows" {
 		_ = os.Rename(dst, dst+".old")
@@ -164,7 +211,11 @@ func writeExecutable(dst string, r io.Reader) error {
 // ---- 版本 ----
 
 // Version 读取组件自报的版本号(带缓存)。未安装返回空串。
+// aria2 不在本容器内,它的版本由调用方通过 RPC 取,这里始终返回空。
 func (m *Manager) Version(k Kind) string {
+	if k == Aria2 {
+		return ""
+	}
 	m.mu.Lock()
 	if c, ok := m.versions[k]; ok && time.Since(c.at) < versionTTL {
 		m.mu.Unlock()
@@ -197,7 +248,7 @@ func versionArg(k Kind) string {
 	if k == Ytdlp {
 		return "--version"
 	}
-	return "-version" // aria2c 与 ffmpeg 都认 -version
+	return "-version" // ffmpeg
 }
 
 // parseVersion 从各家五花八门的输出里抠出版本号。
@@ -207,11 +258,6 @@ func parseVersion(k Kind, out string) string {
 	switch k {
 	case Ytdlp:
 		return line // yt-dlp 直接打印 "2026.01.01"
-	case Aria2:
-		// "aria2 version 1.37.0"
-		if i := strings.Index(line, "version "); i >= 0 {
-			return strings.TrimSpace(line[i+len("version "):])
-		}
 	case FFmpeg:
 		// "ffmpeg version n7.1-xxx Copyright (c) ..."
 		if rest, ok := strings.CutPrefix(line, "ffmpeg version "); ok {
@@ -264,10 +310,10 @@ func fetchRelease(ctx context.Context, repo string) (*ghRelease, error) {
 	return &rel, nil
 }
 
-// Latest 查上游最新版本号(带缓存)。ffmpeg 的构建仓库用滚动 tag,
-// 没有可比较的版本号,返回空串——它只能「重新装一次最新的」。
+// Latest 查上游最新版本号(带缓存)。只有托管组件需要——其余的升级
+// 不归网页管,查了也没处用。查不到返回空串。
 func (m *Manager) Latest(ctx context.Context, k Kind) string {
-	if k == FFmpeg {
+	if !m.Managed(k) {
 		return ""
 	}
 	m.mu.Lock()
@@ -278,7 +324,7 @@ func (m *Manager) Latest(ctx context.Context, k Kind) string {
 	m.mu.Unlock()
 
 	var v string
-	if rel, err := fetchRelease(ctx, repoOf(k)); err == nil {
+	if rel, err := fetchRelease(ctx, ytdlpRepo); err == nil {
 		v = strings.TrimPrefix(rel.TagName, "v")
 	}
 	m.mu.Lock()
@@ -287,27 +333,17 @@ func (m *Manager) Latest(ctx context.Context, k Kind) string {
 	return v
 }
 
-func repoOf(k Kind) string {
-	switch k {
-	case Ytdlp:
-		return "yt-dlp/yt-dlp"
-	case Aria2:
-		return "abcfy2/aria2-static-build"
-	case FFmpeg:
-		return "BtbN/FFmpeg-Builds"
-	}
-	return ""
-}
+const ytdlpRepo = "yt-dlp/yt-dlp"
 
 // Status 汇总一个组件的当前状态。ctx 用于查上游版本,超时不影响本地信息。
 func (m *Manager) Status(ctx context.Context, k Kind) Info {
 	v := m.Version(k)
 	info := Info{
 		Kind: k, Installed: v != "", Version: v,
-		Managed: m.Managed(), Path: m.Path(k),
+		Channel: m.Channel(k), Path: m.Path(k),
 	}
-	if !m.Managed() {
-		return info // 本机开发:装没装、什么版本,都由用户自己的 PATH 决定
+	if !m.Managed(k) {
+		return info
 	}
 	info.Latest = m.Latest(ctx, k)
 	if info.Installed && info.Latest != "" && info.Latest != info.Version {
@@ -318,10 +354,13 @@ func (m *Manager) Status(ctx context.Context, k Kind) Info {
 
 // ---- 安装/升级 ----
 
-// Install 下载并安装(或升级)一个组件。
+// Install 下载并安装(或升级)一个组件。只有 yt-dlp 走这条路。
 func (m *Manager) Install(ctx context.Context, k Kind) error {
-	if !m.Managed() {
-		return errors.New("当前部署方式不托管组件,请用系统包管理器安装")
+	if k != Ytdlp {
+		return errors.New("这个组件不由网页管理,升级方式见下方说明")
+	}
+	if !m.Managed(k) {
+		return errors.New("当前以本机开发方式运行,请用系统包管理器安装 yt-dlp")
 	}
 	m.mu.Lock()
 	if m.installing[k] {
@@ -339,18 +378,7 @@ func (m *Manager) Install(ctx context.Context, k Kind) error {
 	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
 	defer cancel()
 
-	var err error
-	switch k {
-	case Ytdlp:
-		err = m.installYtdlp(ctx)
-	case Aria2:
-		err = m.installAria2(ctx)
-	case FFmpeg:
-		err = m.installFFmpeg(ctx)
-	default:
-		err = errors.New("未知组件")
-	}
-	if err != nil {
+	if err := m.installYtdlp(ctx); err != nil {
 		return err
 	}
 	m.invalidate(k)
@@ -391,7 +419,7 @@ func (m *Manager) installYtdlp(ctx context.Context) error {
 	if runtime.GOARCH == "arm64" {
 		names = []string{"yt-dlp_musllinux_aarch64", "yt-dlp_linux_aarch64"}
 	}
-	rel, err := fetchRelease(ctx, repoOf(Ytdlp))
+	rel, err := fetchRelease(ctx, ytdlpRepo)
 	if err != nil {
 		return err
 	}
@@ -405,87 +433,4 @@ func (m *Manager) installYtdlp(ctx context.Context) error {
 	}
 	defer body.Close()
 	return writeExecutable(m.Path(Ytdlp), body)
-}
-
-func (m *Manager) installAria2(ctx context.Context) error {
-	// 静态构建打在 zip 里,zip 的中央目录在末尾,得整包读进内存才能定位
-	names := []string{"aria2-x86_64-linux-musl_static.zip"}
-	if runtime.GOARCH == "arm64" {
-		names = []string{"aria2-aarch64-linux-musl_static.zip"}
-	}
-	rel, err := fetchRelease(ctx, repoOf(Aria2))
-	if err != nil {
-		return err
-	}
-	url, err := findAsset(rel, names)
-	if err != nil {
-		return err
-	}
-	body, err := download(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer body.Close()
-	buf, err := io.ReadAll(io.LimitReader(body, maxDownload))
-	if err != nil {
-		return err
-	}
-	zr, err := zip.NewReader(bytes.NewReader(buf), int64(len(buf)))
-	if err != nil {
-		return err
-	}
-	for _, f := range zr.File {
-		if path.Base(f.Name) != "aria2c" {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-		return writeExecutable(m.Path(Aria2), rc)
-	}
-	return errors.New("下载的压缩包里没有 aria2c")
-}
-
-func (m *Manager) installFFmpeg(ctx context.Context) error {
-	// BtbN 的构建是 tar.xz,二进制在 <顶层目录>/bin/ffmpeg
-	names := []string{"ffmpeg-master-latest-linux64-gpl.tar.xz"}
-	if runtime.GOARCH == "arm64" {
-		names = []string{"ffmpeg-master-latest-linuxarm64-gpl.tar.xz"}
-	}
-	rel, err := fetchRelease(ctx, repoOf(FFmpeg))
-	if err != nil {
-		return err
-	}
-	url, err := findAsset(rel, names)
-	if err != nil {
-		return err
-	}
-	body, err := download(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer body.Close()
-
-	xr, err := xz.NewReader(io.LimitReader(body, maxDownload))
-	if err != nil {
-		return err
-	}
-	tr := tar.NewReader(xr)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		// 包里还有 ffprobe/ffplay 和一堆文档,只要 bin/ffmpeg
-		if hdr.Typeflag == tar.TypeReg &&
-			path.Base(hdr.Name) == "ffmpeg" && strings.Contains(hdr.Name, "/bin/") {
-			return writeExecutable(m.Path(FFmpeg), tr)
-		}
-	}
-	return errors.New("下载的压缩包里没有 ffmpeg")
 }

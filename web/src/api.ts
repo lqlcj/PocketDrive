@@ -149,6 +149,9 @@ export interface ArchiveTask {
 }
 
 /** 外部组件(yt-dlp / aria2 / ffmpeg)的状态,可在网页里各自升级 */
+/** 组件的升级渠道:只有 managed 能在网页里点一下就升级 */
+export type ComponentChannel = 'managed' | 'image' | 'sidecar' | 'system';
+
 export interface ComponentInfo {
     kind: string;
     title: string;
@@ -157,9 +160,11 @@ export interface ComponentInfo {
     version: string;
     latest: string;
     outdated: boolean;
-    managed: boolean;
+    channel: ComponentChannel;
     running: boolean;
     lastUpdated: string;
+    /** 不能在网页里升级时,替代按钮显示的一句话 */
+    updateHint: string;
 }
 
 /** 外部存储挂载的用量 */
@@ -309,10 +314,7 @@ export const api = {
     components: () =>
         req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),
     installComponent: (kind: string) =>
-        post<{ ok: boolean; version: string; restarted: boolean }>(
-            '/api/v1/components/install',
-            { kind },
-        ),
+        post<{ ok: boolean; version: string }>('/api/v1/components/install', { kind }),
 
     avatarUrl: (version: string) =>
         `/api/v1/public/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`,

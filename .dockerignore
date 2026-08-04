@@ -1,0 +1,20 @@
+# 构建上下文只需要源码:依赖在镜像内装,前端产物由 webbuild 阶段生成
+.git
+.github
+.claude
+
+web/node_modules
+web/dist
+web/shots
+
+# 本地运行时产生的东西,别带进镜像
+data
+uploads
+thumbs
+*.db
+*.db-*
+*.exe
+pocketdrive
+server.log
+cookies.txt
+ck.txt

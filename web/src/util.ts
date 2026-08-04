@@ -96,3 +96,36 @@ export function extractable(name: string): boolean {
         l.endsWith(s),
     );
 }
+
+/**
+ * 复制文本到剪贴板。
+ *
+ * navigator.clipboard 只在 secure context 里存在——用 http://IP:16688
+ * 直接访问自己 VPS 时它是 undefined,直接用会抛 TypeError。这里退回到
+ * 老的 execCommand('copy'),两条路都不通才报失败。
+ */
+export async function copyText(text: string): Promise<boolean> {
+    try {
+        if (window.isSecureContext && navigator.clipboard) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch {
+        // 落到下面的兜底
+    }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        // 不能用 display:none,否则选不中
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        ta.setAttribute('readonly', '');
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch {
+        return false;
+    }
+}

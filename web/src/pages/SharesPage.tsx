@@ -6,7 +6,7 @@ import type { Share } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/progress';
-import { formatTime, shareLink } from '../util';
+import { copyText, formatTime, shareLink } from '../util';
 
 export default function SharesPage() {
     const [shares, setShares] = useState<Share[]>([]);
@@ -22,12 +22,9 @@ export default function SharesPage() {
     useEffect(load, [load]);
 
     const copyLink = async (s: Share) => {
-        try {
-            await navigator.clipboard.writeText(shareLink(s));
-            toast.success('已复制链接');
-        } catch {
-            toast.warning('复制失败');
-        }
+        // navigator.clipboard 在 http:// 下不存在,copyText 里有兜底
+        if (await copyText(shareLink(s))) toast.success('已复制链接');
+        else toast.warning('复制失败,请手动选中链接');
     };
 
     const delShare = async (s: Share) => {

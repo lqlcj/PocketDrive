@@ -12,7 +12,12 @@ import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import { Badge, Progress } from '../components/ui/progress';
 import KindIcon from '../components/KindIcon';
 import Avatar from '../components/Avatar';
-import { fileKind, formatBytes, formatTime } from '../util';
+import { fileKind, formatBytes, formatTime, copyText } from '../util';
+
+// 一键安装脚本把站点装在 /opt/pocketdrive;自己 compose 部署的用户
+// 换成自己的目录即可。命令写在前端而不是后端拼:后端并不知道用户把
+// compose 文件放在哪,写死一个路径更可能是错的。
+const UPGRADE_CMD = 'cd /opt/pocketdrive && docker compose pull && docker compose up -d';
 
 export default function Settings({
     profile,
@@ -140,16 +145,18 @@ export default function Settings({
         setInstalling(kind);
         try {
             const r = await api.installComponent(kind);
-            toast.success(
-                `${title} 已更新到 ${r.version || '最新版'}` +
-                    (r.restarted ? '(已重启生效)' : ''),
-            );
+            toast.success(`${title} 已更新到 ${r.version || '最新版'}`);
             loadComponents();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '更新失败');
         } finally {
             setInstalling('');
         }
+    };
+
+    const copyUpgradeCmd = async () => {
+        if (await copyText(UPGRADE_CMD)) toast.success('命令已复制');
+        else toast.warning('复制失败,请手动选中');
     };
 
     const doImport = async () => {
@@ -416,10 +423,15 @@ export default function Settings({
                                         <div className="flex-1 min-w-0">
                                             <div className="text-sm font-bold flex items-center gap-1.5 flex-wrap">
                                                 {c.title}
-                                                {!c.installed ? (
+                                                {/* aria2 在另一个容器里,连不上和没装是两回事 */}
+                                                {!c.running ? (
+                                                    <Badge tone="red">
+                                                        {c.kind === 'aria2'
+                                                            ? '未连接'
+                                                            : '未运行'}
+                                                    </Badge>
+                                                ) : !c.installed ? (
                                                     <Badge tone="red">未安装</Badge>
-                                                ) : !c.running ? (
-                                                    <Badge tone="red">未运行</Badge>
                                                 ) : c.outdated ? (
                                                     <Badge tone="orange">
                                                         有新版 {c.latest}
@@ -438,10 +450,14 @@ export default function Settings({
                                                 )}
                                             </div>
                                         </div>
-                                        {c.managed && (
+                                        {c.channel === 'managed' ? (
                                             <Button
                                                 size="sm"
-                                                variant={c.outdated || !c.installed ? 'primary' : 'default'}
+                                                variant={
+                                                    c.outdated || !c.installed
+                                                        ? 'primary'
+                                                        : 'default'
+                                                }
                                                 disabled={installing !== ''}
                                                 onClick={() => installComponent(c.kind, c.title)}
                                             >
@@ -453,22 +469,42 @@ export default function Settings({
                                                         ? '升级'
                                                         : '重新下载'}
                                             </Button>
+                                        ) : (
+                                            <span className="text-xs text-ink-soft whitespace-nowrap">
+                                                {c.updateHint}
+                                            </span>
                                         )}
                                     </div>
                                 ))}
-                                <p className="text-xs text-ink-soft leading-relaxed">
-                                    {comps.some((c) => c.managed) ? (
-                                        <>
-                                            三个组件都装在 config 卷里,升级结果跨容器重启保留,
-                                            不需要在服务器上敲任何命令。aria2 升级后会自动重启生效
-                                        </>
-                                    ) : (
-                                        <>
-                                            当前以非托管方式运行(本机开发),组件版本取决于你系统
-                                            PATH 里的安装
-                                        </>
-                                    )}
-                                </p>
+
+                                {/* 「以后要更新了怎么办」必须写在界面上,别让人到时候去翻文档 */}
+                                {comps.some((c) => c.channel === 'managed') ? (
+                                    <div className="border-t border-line pt-2.5 flex flex-col gap-2">
+                                        <p className="text-xs text-ink-soft leading-relaxed">
+                                            yt-dlp 装在 config 卷里,在这儿点一下就能升级,重启容器也不会退回旧版
+                                            —— 它更新最频繁,视频站点一改规则就得跟。
+                                            aria2 和 ffmpeg 跟着容器镜像走,在服务器上执行这条命令即可,
+                                            网盘文件和配置都不受影响:
+                                        </p>
+                                        <div className="flex items-center gap-2">
+                                            <code className="flex-1 min-w-0 bg-paper-2 rounded-lg px-2.5 py-1.5 text-xs break-all">
+                                                {UPGRADE_CMD}
+                                            </code>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={copyUpgradeCmd}
+                                            >
+                                                复制
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-ink-soft leading-relaxed">
+                                        当前以本机开发方式运行,三个组件的版本都取决于你系统 PATH
+                                        里的安装
+                                    </p>
+                                )}
                             </div>
                         )}
                     </Card>
