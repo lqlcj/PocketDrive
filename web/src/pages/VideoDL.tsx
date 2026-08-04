@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Clapperboard, Folder, FolderOpen, ListVideo, Music, Youtube } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { YtdlpTask } from '../api';
@@ -42,6 +43,7 @@ export default function VideoDL() {
     const [embedThumb, setEmbedThumb] = useState(false);
     const [embedMeta, setEmbedMeta] = useState(false);
     const [subs, setSubs] = useState(false);
+    const [playlist, setPlaylist] = useState(false);
     const [tasks, setTasks] = useState<YtdlpTask[]>([]);
     const [available, setAvailable] = useState(true);
     const [version, setVersion] = useState('');
@@ -72,8 +74,13 @@ export default function VideoDL() {
         if (!url.trim()) return;
         setAdding(true);
         try {
-            await api.addYtdlp(url.trim(), dir, preset, { embedThumb, embedMeta, subs });
-            toast.success('任务已加入队列');
+            await api.addYtdlp(url.trim(), dir, preset, {
+                embedThumb,
+                embedMeta,
+                subs,
+                playlist,
+            });
+            toast.success(playlist ? '播放列表任务已加入队列' : '任务已加入队列');
             setUrl('');
             load();
         } catch (e) {
@@ -92,10 +99,20 @@ export default function VideoDL() {
         }
     };
 
+    const isPlaylistTask = (t: YtdlpTask) => {
+        try {
+            return Boolean(JSON.parse(t.options || '{}').playlist);
+        } catch {
+            return false;
+        }
+    };
+
     return (
         <div>
             <div className="flex items-center gap-3 mb-4 flex-wrap">
-                <h2 className="text-xl font-extrabold">🎬 yt下载</h2>
+                <h2 className="text-xl font-extrabold flex items-center gap-2">
+                    <Youtube className="size-5 text-leaf-dark" /> yt下载
+                </h2>
                 {available ? (
                     version && <Badge tone="green">yt-dlp {version}</Badge>
                 ) : (
@@ -111,8 +128,9 @@ export default function VideoDL() {
                 />
                 <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex items-center gap-2 bg-paper-2 rounded-full px-3.5 py-1.5 flex-1 min-w-44">
+                        <Folder className="size-4 text-ink-soft shrink-0" />
                         <span className="text-sm truncate flex-1">
-                            📁 {dir === '' ? '根目录' : dir}
+                            {dir === '' ? '根目录' : dir}
                         </span>
                         <Button size="sm" onClick={() => setPickerOpen(true)}>
                             选择目录
@@ -145,7 +163,17 @@ export default function VideoDL() {
                         checked={subs}
                         onChange={(e) => setSubs(e.target.checked)}
                     />
+                    <Checkbox
+                        label="整个播放列表批量下载"
+                        checked={playlist}
+                        onChange={(e) => setPlaylist(e.target.checked)}
+                    />
                 </div>
+                {playlist && (
+                    <p className="text-xs text-ink-soft">
+                        播放列表会存进「播放列表名」子文件夹,文件名带序号;仅对合集/列表链接生效
+                    </p>
+                )}
             </Card>
 
             <FolderPicker
@@ -157,21 +185,26 @@ export default function VideoDL() {
 
             {tasks.length === 0 ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">
-                    暂无任务,贴个链接试试 🎥
+                    暂无任务,贴个链接试试
                 </Card>
             ) : (
                 <div className="flex flex-col gap-3">
                     {tasks.map((t) => {
                         const s = STATUS[t.status] ?? { text: t.status, tone: 'default' as const };
+                        const TaskIcon = isPlaylistTask(t)
+                            ? ListVideo
+                            : t.preset.startsWith('audio')
+                              ? Music
+                              : Clapperboard;
                         return (
                             <Card key={t.id}>
                                 <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                                     <span
-                                        className="flex-1 min-w-0 font-bold truncate"
+                                        className="flex-1 min-w-0 font-bold truncate inline-flex items-center gap-1.5"
                                         title={t.title || t.url}
                                     >
-                                        {t.preset.startsWith('audio') ? '🎵' : '🎬'}{' '}
-                                        {t.title || t.url}
+                                        <TaskIcon className="size-4 text-leaf-dark shrink-0" />
+                                        <span className="truncate">{t.title || t.url}</span>
                                     </span>
                                     <Badge>{PRESET_LABEL[t.preset] ?? t.preset}</Badge>
                                     <Badge tone={s.tone}>{s.text}</Badge>
@@ -179,8 +212,11 @@ export default function VideoDL() {
                                 {(t.status === 'running' || t.status === 'queued') && (
                                     <Progress percent={t.progress} />
                                 )}
-                                <div className="flex gap-3.5 flex-wrap text-xs text-ink-soft mt-2">
-                                    <span>📂 {t.dir || '根目录'}</span>
+                                <div className="flex gap-3.5 flex-wrap text-xs text-ink-soft mt-2 items-center">
+                                    <span className="inline-flex items-center gap-1">
+                                        <Folder className="size-3" />
+                                        {t.dir || '根目录'}
+                                    </span>
                                     <span>{formatTime(t.createdAt)}</span>
                                 </div>
                                 {t.errorMsg && (
@@ -218,7 +254,7 @@ export default function VideoDL() {
                                         size="sm"
                                         onClick={() => navigate(`/files/${t.dir}`)}
                                     >
-                                        打开目录
+                                        <FolderOpen className="size-3.5" /> 打开目录
                                     </Button>
                                     <Button
                                         variant="ghost-danger"

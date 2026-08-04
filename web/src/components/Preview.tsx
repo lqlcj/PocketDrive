@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Music, Pencil } from 'lucide-react';
 import { api } from '../api';
 import type { FileEntry } from '../api';
-import { browserPlayable, fileKind, formatBytes } from '../util';
+import { browserPlayable, fileKind, formatBytes, officePreviewable } from '../util';
 import { Dialog, DialogContent } from './ui/dialog';
 import { Button } from './ui/button';
+import OfficePreview from './OfficePreview';
 
 interface Props {
     entries: FileEntry[];
@@ -41,6 +43,16 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
         .filter(({ e }) => !e.dir && fileKind(e.name) === 'image')
         .map(({ i }) => i);
     const imgPos = imageIdxs.indexOf(index);
+
+    const downloadHint = (msg: string) => (
+        <p className="text-center py-6 text-sm">
+            {msg},可{' '}
+            <a className="text-leaf-dark underline" href={api.downloadUrl(path, true)} download>
+                下载
+            </a>{' '}
+            到本地打开。
+        </p>
+    );
 
     let body;
     switch (kind) {
@@ -97,7 +109,7 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
         case 'audio':
             body = (
                 <div className="text-center py-6">
-                    <div className="text-5xl mb-3">🎵</div>
+                    <Music className="size-12 mx-auto mb-3 text-leaf-dark" />
                     {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                     <audio src={url} controls autoPlay className="w-full" />
                 </div>
@@ -111,7 +123,7 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
                     <div>
                         <div className="flex justify-end mb-2">
                             <Button size="sm" onClick={() => navigate(`/note/${path}`)}>
-                                ✏️ 编辑
+                                <Pencil className="size-3.5" /> 编辑
                             </Button>
                         </div>
                         <div className="prose-island max-h-[62vh] overflow-auto">
@@ -130,20 +142,26 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
                     </pre>
                 );
             break;
-        default:
+        case 'pdf':
             body = (
-                <p className="text-center py-6 text-sm">
-                    此类型暂不支持预览({formatBytes(entry.size)}),可{' '}
-                    <a
-                        className="text-leaf-dark underline"
-                        href={api.downloadUrl(path, true)}
-                        download
-                    >
-                        下载
-                    </a>{' '}
-                    到本地打开。
-                </p>
+                <iframe
+                    src={url}
+                    title={entry.name}
+                    className="w-full h-[70vh] rounded-xl bg-white border border-line/70"
+                />
             );
+            break;
+        case 'doc':
+        case 'sheet':
+        case 'slide':
+            body = officePreviewable(entry.name) ? (
+                <OfficePreview url={url} name={entry.name} />
+            ) : (
+                downloadHint('旧版二进制格式(.doc/.ppt)暂不支持在线预览')
+            );
+            break;
+        default:
+            body = downloadHint(`此类型暂不支持预览(${formatBytes(entry.size)})`);
     }
 
     return (

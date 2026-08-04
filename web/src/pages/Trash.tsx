@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { TrashItem } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
-import { formatBytes, formatTime } from '../util';
+import KindIcon from '../components/KindIcon';
+import { fileKind, formatBytes, formatTime } from '../util';
 
 export default function Trash() {
     const [items, setItems] = useState<TrashItem[]>([]);
@@ -40,7 +42,9 @@ export default function Trash() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-xl font-extrabold">🗑️ 垃圾桶</h2>
+                <h2 className="text-xl font-extrabold flex items-center gap-2">
+                    <Trash2 className="size-5 text-leaf-dark" /> 垃圾桶
+                </h2>
                 <span className="text-sm text-ink-soft">30 天后自动清理</span>
                 {items.length > 0 && (
                     <Button
@@ -58,16 +62,19 @@ export default function Trash() {
                 <Card className="text-center text-ink-soft py-10 text-sm">加载中…</Card>
             ) : items.length === 0 ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">
-                    垃圾桶干干净净 ✨
+                    垃圾桶干干净净
                 </Card>
             ) : (
                 <Card className="p-0 overflow-hidden">
                     {items.map((it) => (
                         <div
                             key={it.id}
-                            className="flex items-center gap-3 px-4 py-2.5 border-b border-dashed border-line last:border-b-0 flex-wrap"
+                            className="flex items-center gap-3 px-4 py-2.5 border-b border-line/50 last:border-b-0 flex-wrap"
                         >
-                            <span className="text-lg">{it.dir ? '📁' : '📄'}</span>
+                            <KindIcon
+                                kind={fileKind(it.name, it.dir)}
+                                className="size-[18px]"
+                            />
                             <span className="flex-1 min-w-0">
                                 <span className="block font-bold text-sm truncate">
                                     {it.name}

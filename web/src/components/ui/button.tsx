@@ -9,11 +9,11 @@ const buttonVariants = cva(
         variants: {
             variant: {
                 default:
-                    'bg-paper text-ink border-2 border-line rounded-full shadow-sm hover:border-leaf hover:text-leaf-dark',
+                    'bg-paper text-ink border border-line rounded-full shadow-xs hover:border-leaf/60 hover:text-leaf-dark',
                 primary:
-                    'bg-leaf text-white rounded-full shadow-sm hover:brightness-105 border-2 border-leaf',
+                    'bg-leaf text-white rounded-full shadow-xs hover:brightness-105 border border-leaf',
                 ghost: 'rounded-full text-ink hover:bg-paper-2',
-                danger: 'bg-paper text-danger border-2 border-danger/40 rounded-full hover:bg-danger-soft',
+                danger: 'bg-paper text-danger border border-danger/40 rounded-full hover:bg-danger-soft',
                 'ghost-danger': 'rounded-full text-danger hover:bg-danger-soft',
             },
             size: {

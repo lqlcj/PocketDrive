@@ -2,7 +2,7 @@ package config
 
 import "os"
 
-const Version = "0.1.0"
+const Version = "0.4.0"
 
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -30,7 +30,8 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Addr:          envOr("POCKETDRIVE_ADDR", ":8080"),
+		// 默认 16688:避开 8080 等常见端口的冲突
+		Addr:          envOr("POCKETDRIVE_ADDR", ":16688"),
 		DataDir:       envOr("POCKETDRIVE_DATA_DIR", "./data"),
 		DBPath:        envOr("POCKETDRIVE_DB", "./pocketdrive.db"),
 		AdminUser:     envOr("POCKETDRIVE_ADMIN_USER", "admin"),

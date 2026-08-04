@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Home } from 'lucide-react';
 import { api } from '../api';
+import { EntryIcon } from './KindIcon';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -114,9 +115,20 @@ export default function FileTree({
                         onClick={() => onNavigate(p)}
                         title={name}
                     >
-                        <span className="shrink-0">
-                            {p === '' ? '🏝️' : (icons[p] ?? '📁')}
-                        </span>
+                        {p === '' ? (
+                            <Home
+                                className={cn(
+                                    'size-4 shrink-0',
+                                    active ? 'text-white' : 'text-leaf-dark',
+                                )}
+                            />
+                        ) : (
+                            <EntryIcon
+                                kind="folder"
+                                custom={icons[p]}
+                                className={cn('size-4', active && 'text-white fill-white/20')}
+                            />
+                        )}
                         <span className="truncate">{name}</span>
                     </button>
                 </div>
@@ -131,7 +143,7 @@ export default function FileTree({
     return (
         <div
             className={cn(
-                'bg-paper border-2 border-line rounded-[var(--radius-card)] p-2 overflow-auto',
+                'bg-paper border border-line/70 rounded-[var(--radius-card)] shadow-[var(--shadow-card)] p-2 overflow-auto',
                 className,
             )}
         >

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { api } from './api';
 import type { Profile } from './api';
 import Layout from './components/Layout';
 import Login from './pages/Login';
-import Home from './pages/Home';
 import Files from './pages/Files';
 import NoteEditor from './pages/NoteEditor';
 import Downloads from './pages/Downloads';
@@ -26,8 +26,8 @@ function Private({
 }) {
     if (profile === undefined) {
         return (
-            <div className="min-h-screen flex items-center justify-center text-lg">
-                🏝️ 加载中…
+            <div className="min-h-screen flex items-center justify-center gap-2 text-ink-soft">
+                <Loader2 className="size-5 animate-spin" /> 加载中…
             </div>
         );
     }
@@ -37,7 +37,8 @@ function Private({
     return (
         <Routes>
             <Route element={<Layout profile={profile} onLogout={onLogout} />}>
-                <Route path="/" element={<Home />} />
+                {/* 我的文件即主页 */}
+                <Route path="/" element={<Navigate to="/files" replace />} />
                 <Route path="/files/*" element={<Files />} />
                 <Route path="/note/*" element={<NoteEditor />} />
                 <Route path="/downloads" element={<Downloads />} />
@@ -49,7 +50,7 @@ function Private({
                     path="/settings"
                     element={<Settings profile={profile} onProfile={onProfile} />}
                 />
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/files" replace />} />
             </Route>
         </Routes>
     );

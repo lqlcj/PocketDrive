@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import {
+    FolderOpen,
+    FolderPlus,
+    Home,
+    LayoutGrid,
+    List,
+    NotebookPen,
+    RefreshCw,
+    Upload,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { FileEntry, Share } from '../api';
-import { fileKind, formatBytes, formatTime, KIND_ICON } from '../util';
+import { fileKind, formatBytes, formatTime } from '../util';
 import Preview from '../components/Preview';
 import FolderPicker from '../components/FolderPicker';
 import FileTree from '../components/FileTree';
+import KindIcon, { EntryIcon } from '../components/KindIcon';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input, NativeSelect } from '../components/ui/input';
@@ -31,8 +42,11 @@ function Breadcrumb({ path }: { path: string }) {
     let acc = '';
     return (
         <div className="text-sm text-ink-soft break-all mb-3">
-            <Link className="text-leaf-dark font-bold" to="/files">
-                🏝️ 根目录
+            <Link
+                className="text-leaf-dark font-bold inline-flex items-center gap-1 align-middle"
+                to="/files"
+            >
+                <Home className="size-3.5" /> 根目录
             </Link>
             {parts.map((p, i) => {
                 acc += (i === 0 ? '' : '/') + p;
@@ -74,8 +88,13 @@ function Thumb({
         );
     }
     return (
-        <div className="w-full h-28 flex items-center justify-center text-4xl bg-paper-2">
-            {dir ? (dirIcon ?? '📁') : KIND_ICON[kind]}
+        <div className="w-full h-28 flex items-center justify-center bg-paper-2">
+            <EntryIcon
+                kind={kind}
+                custom={dir ? dirIcon : undefined}
+                className="size-10"
+                emojiClassName="text-4xl"
+            />
         </div>
     );
 }
@@ -289,8 +308,14 @@ export default function Files() {
         doMoveTo(src, dest);
     };
 
-    const entryIcon = (e: FileEntry) =>
-        e.dir ? (icons[join(e.name)] ?? '📁') : KIND_ICON[fileKind(e.name)];
+    const entryIcon = (e: FileEntry) => (
+        <EntryIcon
+            kind={fileKind(e.name, e.dir)}
+            custom={e.dir ? icons[join(e.name)] : undefined}
+            className="size-[18px]"
+            emojiClassName="text-lg"
+        />
+    );
 
     const actions = (e: FileEntry) => (
         <span className="flex gap-0.5 shrink-0 flex-wrap justify-end">
@@ -344,7 +369,9 @@ export default function Files() {
             }}
         >
             <div className="flex items-center gap-3 flex-wrap mb-3">
-                <h2 className="text-xl font-extrabold">📁 我的文件</h2>
+                <h2 className="text-xl font-extrabold flex items-center gap-2">
+                    <FolderOpen className="size-5 text-leaf-dark" /> 我的文件
+                </h2>
                 <div className="ml-auto flex gap-2 flex-wrap">
                     <input
                         ref={fileInput}
@@ -359,22 +386,30 @@ export default function Files() {
                         disabled={uploading}
                         onClick={() => fileInput.current?.click()}
                     >
-                        ⬆ {uploading ? '上传中…' : '上传'}
+                        <Upload className="size-3.5" /> {uploading ? '上传中…' : '上传'}
                     </Button>
                     <Button size="sm" onClick={() => setMkdirOpen(true)}>
-                        新建文件夹
+                        <FolderPlus className="size-3.5" /> 新建文件夹
                     </Button>
                     <Button size="sm" onClick={() => setNoteOpen(true)}>
-                        📔 新建笔记
+                        <NotebookPen className="size-3.5" /> 新建笔记
                     </Button>
                     <Button
                         size="sm"
                         onClick={() => switchView(view === 'list' ? 'grid' : 'list')}
                     >
-                        {view === 'list' ? '🖼️ 缩略图' : '📄 列表'}
+                        {view === 'list' ? (
+                            <>
+                                <LayoutGrid className="size-3.5" /> 缩略图
+                            </>
+                        ) : (
+                            <>
+                                <List className="size-3.5" /> 列表
+                            </>
+                        )}
                     </Button>
-                    <Button size="sm" onClick={load}>
-                        刷新
+                    <Button size="sm" onClick={load} aria-label="刷新">
+                        <RefreshCw className="size-3.5" /> 刷新
                     </Button>
                 </div>
             </div>
@@ -384,7 +419,8 @@ export default function Files() {
             {bigUpload && (
                 <Card className="mb-3 py-3">
                     <div className="flex items-center gap-2 text-sm font-bold mb-1.5">
-                        <span>⬆ 分片上传中:{bigUpload.name}</span>
+                        <Upload className="size-4" />
+                        <span>分片上传中:{bigUpload.name}</span>
                     </div>
                     <Progress percent={bigUpload.pct} />
                 </Card>
@@ -413,7 +449,7 @@ export default function Files() {
                             </div>
                         ) : entries.length === 0 ? (
                             <div className="text-center text-ink-soft py-10 text-sm">
-                                这里空空如也,拖拽文件到此处上传 🍃
+                                这里空空如也,拖拽文件到此处上传
                             </div>
                         ) : view === 'list' ? (
                             <div>
@@ -437,7 +473,7 @@ export default function Files() {
                                         }
                                         onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
                                         className={cn(
-                                            'flex items-center gap-2.5 px-4 py-2 border-b border-dashed border-line last:border-b-0 hover:bg-paper-2/60 flex-wrap',
+                                            'flex items-center gap-2.5 px-4 py-2 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 flex-wrap',
                                             dropTarget === e.name &&
                                                 'bg-leaf-soft outline-2 outline-dashed outline-leaf -outline-offset-2',
                                         )}
@@ -451,9 +487,7 @@ export default function Files() {
                                                     : e.name
                                             }
                                         >
-                                            <span className="text-lg shrink-0">
-                                                {entryIcon(e)}
-                                            </span>
+                                            {entryIcon(e)}
                                             <span className="truncate">{e.name}</span>
                                         </button>
                                         <span className="text-xs text-ink-soft w-20 text-right hidden sm:block shrink-0">
@@ -488,7 +522,7 @@ export default function Files() {
                                         }
                                         onDrop={(ev) => e.dir && onFolderDrop(ev, e)}
                                         className={cn(
-                                            'rounded-2xl border-2 border-line overflow-hidden bg-paper flex flex-col',
+                                            'rounded-2xl border border-line/70 overflow-hidden bg-paper flex flex-col',
                                             dropTarget === e.name &&
                                                 'border-leaf bg-leaf-soft',
                                         )}
@@ -520,7 +554,7 @@ export default function Files() {
                         )}
                     </Card>
                     <p className="text-xs text-ink-soft mt-2">
-                        💡 拖拽文件行到文件夹(或左侧目录树同名文件夹)可移动;拖拽本地文件到列表上传;超过
+                        拖拽文件行到文件夹(或左侧目录树同名文件夹)可移动;拖拽本地文件到列表上传;超过
                         64MB 自动分片上传
                     </p>
                 </div>
@@ -611,12 +645,13 @@ export default function Files() {
                             <button
                                 key={em}
                                 className={cn(
-                                    'text-xl rounded-xl py-1.5 cursor-pointer border-2 transition-colors',
+                                    'text-xl rounded-xl py-1.5 cursor-pointer border transition-colors flex items-center justify-center',
                                     iconTarget &&
                                         (icons[join(iconTarget.name)] ?? '📁') === em
                                         ? 'border-leaf bg-leaf-soft'
                                         : 'border-transparent bg-paper-2 hover:border-line',
                                 )}
+                                title={em === '📁' ? '默认图标' : undefined}
                                 onClick={() =>
                                     iconTarget &&
                                     run(
@@ -631,10 +666,17 @@ export default function Files() {
                                     )
                                 }
                             >
-                                {em}
+                                {em === '📁' ? (
+                                    <KindIcon kind="folder" className="size-6" />
+                                ) : (
+                                    em
+                                )}
                             </button>
                         ))}
                     </div>
+                    <p className="text-xs text-ink-soft mt-2">
+                        第一个是默认图标;选个 emoji 给文件夹一点个性
+                    </p>
                 </DialogContent>
             </Dialog>
 

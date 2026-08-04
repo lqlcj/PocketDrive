@@ -28,9 +28,9 @@ RUN apk add --no-cache ca-certificates tzdata ffmpeg curl \
     && chmod +x /usr/local/bin/yt-dlp \
     && apk del curl
 COPY --from=gobuild /out/pocketdrive /usr/local/bin/pocketdrive
-ENV POCKETDRIVE_ADDR=:8080 \
+ENV POCKETDRIVE_ADDR=:16688 \
     POCKETDRIVE_DATA_DIR=/data \
     POCKETDRIVE_DB=/config/pocketdrive.db
 VOLUME ["/data", "/config"]
-EXPOSE 8080
+EXPOSE 16688
 ENTRYPOINT ["pocketdrive"]

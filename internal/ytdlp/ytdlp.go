@@ -33,6 +33,8 @@ const logTailLines = 40
 var (
 	rePercent = regexp.MustCompile(`\[download\]\s+([0-9.]+)%`)
 	reDest    = regexp.MustCompile(`(?:Destination:|Merging formats into ")\s*(.+?)"?\s*$`)
+	// 播放列表模式:[download] Downloading item 3 of 25
+	reItem = regexp.MustCompile(`\[download\] Downloading item (\d+) of (\d+)`)
 )
 
 type Manager struct {
@@ -126,6 +128,8 @@ type Options struct {
 	EmbedMeta  bool `json:"embedMeta"`
 	EmbedThumb bool `json:"embedThumb"`
 	Subs       bool `json:"subs"`
+	// Playlist 为 true 时整个播放列表批量下载(默认只下当前单集)
+	Playlist bool `json:"playlist"`
 }
 
 // presets 是服务端固定白名单:用户只能选 key,参数模板不可注入
@@ -196,8 +200,16 @@ func (m *Manager) run(id uint) {
 
 	var opts Options
 	_ = json.Unmarshal([]byte(t.Options), &opts)
-	args := []string{"--newline", "--no-playlist", "--no-warnings",
-		"-o", filepath.Join(absDir, "%(title)s.%(ext)s")}
+	args := []string{"--newline", "--no-warnings"}
+	if opts.Playlist {
+		// 整个播放列表:存进「播放列表名」子文件夹,文件名带序号;
+		// 模板变量由 yt-dlp 按操作系统清洗,不会产生路径穿越
+		args = append(args, "--yes-playlist",
+			"-o", filepath.Join(absDir, "%(playlist_title,playlist_id|合集)s", "%(playlist_index|0)s - %(title)s.%(ext)s"))
+	} else {
+		args = append(args, "--no-playlist",
+			"-o", filepath.Join(absDir, "%(title)s.%(ext)s"))
+	}
 	args = append(args, presetArgs(t.Preset, opts)...)
 	args = append(args, t.URL)
 
@@ -236,10 +248,12 @@ func (m *Manager) run(id uint) {
 }
 
 // pump reads merged stdout/stderr, tracking progress and a log tail.
+// 播放列表任务的总进度 = (已完成条目数*100 + 当前条目百分比) / 总条目数。
 func (m *Manager) pump(t *db.YtdlpTask, r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 256*1024)
 	var lines []string
+	plItem, plTotal := 0, 0
 	lastSave := time.Now()
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
@@ -250,13 +264,26 @@ func (m *Manager) pump(t *db.YtdlpTask, r io.Reader) {
 		if len(lines) > logTailLines {
 			lines = lines[len(lines)-logTailLines:]
 		}
+		if mm := reItem.FindStringSubmatch(line); mm != nil {
+			plItem, _ = strconv.Atoi(mm[1])
+			plTotal, _ = strconv.Atoi(mm[2])
+		}
 		if mm := rePercent.FindStringSubmatch(line); mm != nil {
 			if v, err := strconv.ParseFloat(mm[1], 64); err == nil {
-				t.Progress = v
+				if plTotal > 1 {
+					t.Progress = (float64(plItem-1)*100 + v) / float64(plTotal)
+				} else {
+					t.Progress = v
+				}
 			}
 		}
 		if mm := reDest.FindStringSubmatch(line); mm != nil {
-			t.Title = path.Base(strings.ReplaceAll(mm[1], "\\", "/"))
+			base := path.Base(strings.ReplaceAll(mm[1], "\\", "/"))
+			if plTotal > 1 {
+				t.Title = "[" + strconv.Itoa(plItem) + "/" + strconv.Itoa(plTotal) + "] " + base
+			} else {
+				t.Title = base
+			}
 		}
 		if time.Since(lastSave) > 700*time.Millisecond {
 			t.LogTail = strings.Join(lines, "\n")

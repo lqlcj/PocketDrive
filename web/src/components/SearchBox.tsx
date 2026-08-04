@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { api } from '../api';
 import type { IndexItem } from '../api';
-import { fileKind, formatBytes, KIND_ICON } from '../util';
+import KindIcon from './KindIcon';
+import { fileKind, formatBytes } from '../util';
 
 /** 顶栏全局搜索:输入防抖搜文件名,点击结果跳到所在目录 */
 export default function SearchBox() {
@@ -61,14 +62,14 @@ export default function SearchBox() {
                 onChange={(e) => setQ(e.target.value)}
                 onFocus={() => results.length > 0 && setOpen(true)}
                 onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
-                placeholder="搜索全岛文件…"
-                className="h-9 w-full rounded-full border-2 border-line bg-paper pl-9 pr-3 text-sm outline-none focus:border-leaf placeholder:text-ink-soft/70"
+                placeholder="搜索全盘文件…"
+                className="h-9 w-full rounded-full border border-line bg-paper pl-9 pr-3 text-sm outline-none transition-[border-color,box-shadow] focus:border-leaf focus:ring-2 focus:ring-leaf/25 placeholder:text-ink-soft/70"
             />
             {open && (
-                <div className="absolute top-11 left-0 right-0 z-40 bg-paper border-2 border-line rounded-2xl shadow-xl overflow-hidden max-h-80 overflow-y-auto">
+                <div className="absolute top-11 left-0 right-0 z-40 bg-paper border border-line/70 rounded-2xl shadow-xl overflow-hidden max-h-80 overflow-y-auto">
                     {results.length === 0 ? (
                         <div className="p-4 text-center text-sm text-ink-soft">
-                            没有找到「{q}」🍂
+                            没有找到「{q}」
                         </div>
                     ) : (
                         results.map((it) => (
@@ -77,7 +78,7 @@ export default function SearchBox() {
                                 onClick={() => go(it)}
                                 className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-paper-2 cursor-pointer"
                             >
-                                <span>{KIND_ICON[fileKind(it.name, it.dir)]}</span>
+                                <KindIcon kind={fileKind(it.name, it.dir)} />
                                 <span className="flex-1 min-w-0">
                                     <span className="block text-sm font-bold truncate">
                                         {it.name}

@@ -29,6 +29,10 @@ export type FileKind =
     | 'markdown'
     | 'text'
     | 'archive'
+    | 'doc'
+    | 'sheet'
+    | 'slide'
+    | 'pdf'
     | 'other';
 
 const EXT_KIND: Record<string, FileKind> = {
@@ -46,6 +50,10 @@ const EXT_KIND: Record<string, FileKind> = {
     cpp: 'text', rs: 'text', java: 'text',
     zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive',
     tar: 'archive', xz: 'archive', bz2: 'archive', iso: 'archive',
+    doc: 'doc', docx: 'doc',
+    xls: 'sheet', xlsx: 'sheet',
+    ppt: 'slide', pptx: 'slide',
+    pdf: 'pdf',
 };
 
 export function fileKind(name: string, dir = false): FileKind {
@@ -56,19 +64,15 @@ export function fileKind(name: string, dir = false): FileKind {
     return EXT_KIND[ext] ?? 'other';
 }
 
-export const KIND_ICON: Record<FileKind, string> = {
-    folder: '📁',
-    image: '🖼️',
-    video: '🎬',
-    audio: '🎵',
-    markdown: '📝',
-    text: '📄',
-    archive: '📦',
-    other: '🍃',
-};
-
 // 浏览器可直接播放的容器格式;其余视频只提供下载
 export function browserPlayable(name: string): boolean {
     const ext = name.split('.').pop()?.toLowerCase() ?? '';
     return ['mp4', 'webm', 'm4v', 'mov', 'ogg'].includes(ext);
+}
+
+// Office 在线预览支持的格式(纯浏览器端渲染,服务器只出文件流)
+export function officePreviewable(name: string): boolean {
+    const ext = name.split('.').pop()?.toLowerCase() ?? '';
+    // 旧二进制格式里只有 .xls 能被 SheetJS 解析;.doc/.ppt 不支持
+    return ['docx', 'xlsx', 'xls', 'pptx'].includes(ext);
 }

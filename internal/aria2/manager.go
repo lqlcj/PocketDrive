@@ -1,6 +1,7 @@
 package aria2
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
@@ -172,10 +173,9 @@ func validURL(raw string) error {
 	return errors.New("仅支持 http/https/ftp 直链或磁力链接")
 }
 
-func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
-	if err := validURL(rawURL); err != nil {
-		return nil, err
-	}
+// taskOpts 组装任务级 aria2 选项:保存目录、做种时长,BT 类任务附加
+// 最新 tracker 列表(对磁力与 .torrent 都生效)。
+func (m *Manager) taskOpts(relDir string, bt bool) map[string]string {
 	dir := m.dataRoot
 	if relDir != "" {
 		dir = path.Join(strings.ReplaceAll(m.dataRoot, "\\", "/"), relDir)
@@ -185,12 +185,19 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 		"dir":       dir,
 		"seed-time": strconv.Itoa(s.SeedTimeMin),
 	}
-	// 磁力任务注入最新 tracker 列表,提升冷门种子连接率
-	if strings.HasPrefix(rawURL, "magnet:") && s.TrackerAuto {
+	if bt && s.TrackerAuto {
 		if t := m.trackers(); t != "" {
 			opts["bt-tracker"] = t
 		}
 	}
+	return opts
+}
+
+func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
+	if err := validURL(rawURL); err != nil {
+		return nil, err
+	}
+	opts := m.taskOpts(relDir, strings.HasPrefix(rawURL, "magnet:"))
 	gid, err := m.c.AddURI(rawURL, opts)
 	if err != nil {
 		m.degraded.Store(true)
@@ -198,6 +205,32 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	}
 	m.degraded.Store(false)
 	t := db.DownloadTask{GID: gid, URL: rawURL, Dir: relDir, Status: "active"}
+	if err := m.db.Create(&t).Error; err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// AddTorrent 用上传的 .torrent 文件(base64)创建 BT 任务。
+func (m *Manager) AddTorrent(torrentB64, relDir, name string) (*db.DownloadTask, error) {
+	raw, err := base64.StdEncoding.DecodeString(torrentB64)
+	if err != nil {
+		return nil, errors.New("种子文件内容不是合法的 base64")
+	}
+	// bencode 字典以 'd' 开头;顺手挡住误传的其他文件
+	if len(raw) == 0 || raw[0] != 'd' {
+		return nil, errors.New("不是有效的 .torrent 文件")
+	}
+	gid, err := m.c.AddTorrent(torrentB64, m.taskOpts(relDir, true))
+	if err != nil {
+		m.degraded.Store(true)
+		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())
+	}
+	m.degraded.Store(false)
+	t := db.DownloadTask{
+		GID: gid, URL: name, Dir: relDir, Status: "active",
+		Name: strings.TrimSuffix(name, ".torrent"),
+	}
 	if err := m.db.Create(&t).Error; err != nil {
 		return nil, err
 	}
@@ -250,6 +283,34 @@ func cleanRel(p string) string {
 	p = strings.ReplaceAll(p, "\\", "/")
 	p = path.Clean("/" + p)
 	return strings.TrimPrefix(p, "/")
+}
+
+// HandleAddTorrent 接收 {torrent: base64, name, dir};.torrent 文件
+// 通常几十 KB,超多文件的种子也就几 MB,放宽到 16MB 上限。
+func (m *Manager) HandleAddTorrent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Torrent string `json:"torrent"`
+		Name    string `json:"name"`
+		Dir     string `json:"dir"`
+	}
+	if err := httpx.DecodeN(r, &req, 16<<20); err != nil {
+		httpx.Err(w, http.StatusBadRequest, "请求格式错误(种子文件过大?)")
+		return
+	}
+	if req.Torrent == "" {
+		httpx.Err(w, http.StatusBadRequest, "缺少种子文件内容")
+		return
+	}
+	name := path.Base(strings.ReplaceAll(strings.TrimSpace(req.Name), "\\", "/"))
+	if name == "" || name == "." {
+		name = "upload.torrent"
+	}
+	t, err := m.AddTorrent(req.Torrent, cleanRel(req.Dir), name)
+	if err != nil {
+		httpx.Err(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "task": t})
 }
 
 func (m *Manager) gidReq(w http.ResponseWriter, r *http.Request) (string, bool) {

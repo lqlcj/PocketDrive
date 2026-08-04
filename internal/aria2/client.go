@@ -83,6 +83,13 @@ func (c *Client) AddURI(uri string, opts map[string]string) (string, error) {
 	return gid, err
 }
 
+// AddTorrent 提交 .torrent 文件内容(base64)创建 BT 任务。
+func (c *Client) AddTorrent(torrentB64 string, opts map[string]string) (string, error) {
+	var gid string
+	err := c.call("aria2.addTorrent", []any{torrentB64, []string{}, opts}, &gid)
+	return gid, err
+}
+
 func (c *Client) ChangeGlobalOption(opts map[string]string) error {
 	return c.call("aria2.changeGlobalOption", []any{opts}, nil)
 }

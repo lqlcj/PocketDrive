@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Folder, Home } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import { Dialog, DialogContent, DialogFooter } from './ui/dialog';
@@ -47,10 +48,10 @@ export default function FolderPicker({
             <DialogContent title={title}>
                 <div className="text-sm text-ink-soft break-all mb-2">
                     <button
-                        className="text-leaf-dark font-bold cursor-pointer"
+                        className="text-leaf-dark font-bold cursor-pointer inline-flex items-center gap-1 align-middle"
                         onClick={() => load('')}
                     >
-                        🏝️ 根目录
+                        <Home className="size-3.5" /> 根目录
                     </button>
                     {parts.map((seg, i) => {
                         const p = parts.slice(0, i + 1).join('/');
@@ -67,7 +68,7 @@ export default function FolderPicker({
                         );
                     })}
                 </div>
-                <div className="border-2 border-dashed border-line rounded-2xl p-1 max-h-64 overflow-auto flex flex-col">
+                <div className="border border-line rounded-2xl p-1 max-h-64 overflow-auto flex flex-col">
                     {loading ? (
                         <div className="text-center text-sm text-ink-soft py-8">加载中…</div>
                     ) : dirs.length === 0 ? (
@@ -78,10 +79,11 @@ export default function FolderPicker({
                         dirs.map((d) => (
                             <button
                                 key={d}
-                                className="text-left px-3 py-2 rounded-xl hover:bg-paper-2 text-sm cursor-pointer"
+                                className="flex items-center gap-2 text-left px-3 py-2 rounded-xl hover:bg-paper-2 text-sm cursor-pointer"
                                 onClick={() => load(path === '' ? d : `${path}/${d}`)}
                             >
-                                📁 {d}
+                                <Folder className="size-4 text-amber-600 dark:text-amber-400 fill-amber-600/15 shrink-0" />
+                                {d}
                             </button>
                         ))
                     )}

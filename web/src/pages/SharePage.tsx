@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { Download, Leaf, Play, TreePalm } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { ShareInfo } from '../api';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
-import { browserPlayable, fileKind, formatBytes, formatTime, KIND_ICON } from '../util';
+import KindIcon from '../components/KindIcon';
+import { browserPlayable, fileKind, formatBytes, formatTime } from '../util';
 
 export default function SharePage() {
     const { token = '' } = useParams();
@@ -45,7 +47,7 @@ export default function SharePage() {
         return (
             <div className="min-h-screen flex items-center justify-center px-4">
                 <Card className="w-full max-w-sm text-center py-8">
-                    <div className="text-4xl">🍂</div>
+                    <Leaf className="size-9 mx-auto text-ink-soft" />
                     <p className="mt-2 text-sm">{error}</p>
                 </Card>
             </div>
@@ -53,7 +55,9 @@ export default function SharePage() {
     }
     if (!info) {
         return (
-            <div className="min-h-screen flex items-center justify-center">🏝️ 加载中…</div>
+            <div className="min-h-screen flex items-center justify-center text-ink-soft">
+                加载中…
+            </div>
         );
     }
 
@@ -65,7 +69,7 @@ export default function SharePage() {
         <div className="min-h-screen flex items-center justify-center px-4 py-8">
             <Card className="w-full max-w-lg p-6">
                 <div className="flex items-center gap-3">
-                    <span className="text-4xl">{KIND_ICON[kind]}</span>
+                    <KindIcon kind={kind} className="size-9" />
                     <div className="min-w-0">
                         <div className="font-extrabold text-lg break-all">{info.name}</div>
                         <div className="text-xs text-ink-soft">
@@ -125,8 +129,10 @@ export default function SharePage() {
                                                 'none';
                                         }}
                                     />
-                                    <span className="absolute inset-0 flex items-center justify-center text-6xl drop-shadow">
-                                        ▶️
+                                    <span className="absolute inset-0 flex items-center justify-center">
+                                        <span className="flex items-center justify-center size-16 rounded-full bg-black/50 text-white">
+                                            <Play className="size-8 fill-current" />
+                                        </span>
                                     </span>
                                 </button>
                             ))}
@@ -136,13 +142,13 @@ export default function SharePage() {
                             className="block mt-4"
                         >
                             <Button variant="primary" className="w-full">
-                                ⬇ 下载文件
+                                <Download className="size-4" /> 下载文件
                             </Button>
                         </a>
                     </div>
                 )}
-                <p className="text-center text-xs text-ink-soft mt-5">
-                    🏝️ 由 PocketDrive 分享
+                <p className="text-center text-xs text-ink-soft mt-5 inline-flex items-center gap-1 justify-center w-full">
+                    <TreePalm className="size-3.5" /> 由 PocketDrive 分享
                 </p>
             </Card>
         </div>

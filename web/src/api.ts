@@ -55,6 +55,7 @@ export interface YtdlpOptions {
     embedMeta?: boolean;
     embedThumb?: boolean;
     subs?: boolean;
+    playlist?: boolean;
 }
 
 export interface YtdlpTask {
@@ -218,6 +219,8 @@ export const api = {
         req<{ degraded: boolean; tasks: DownloadTask[] }>('/api/v1/downloads'),
     addDownload: (url: string, dir: string) =>
         post<{ ok: boolean }>('/api/v1/downloads', { url, dir }),
+    addTorrent: (torrent: string, name: string, dir: string) =>
+        post<{ ok: boolean }>('/api/v1/downloads/torrent', { torrent, name, dir }),
     pauseDownload: (gid: string) => post<{ ok: boolean }>('/api/v1/downloads/pause', { gid }),
     unpauseDownload: (gid: string) =>
         post<{ ok: boolean }>('/api/v1/downloads/unpause', { gid }),

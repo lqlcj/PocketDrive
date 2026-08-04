@@ -1,6 +1,20 @@
 import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Menu, Moon, Sun, X } from 'lucide-react';
+import {
+    CloudDownload,
+    FolderOpen,
+    Link2,
+    LogOut,
+    Menu,
+    Moon,
+    Settings,
+    Sun,
+    TreePalm,
+    Trash2,
+    X,
+    Youtube,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { Profile } from '../api';
@@ -10,43 +24,34 @@ import { applyTheme, getTheme } from '../theme';
 import type { Theme } from '../theme';
 import { cn } from '../lib/utils';
 
-const NAV: Array<{ section?: string; to: string; label: string; icon: string; end?: boolean }> = [
-    { to: '/', label: '主页', icon: '🏝️', end: true },
-    { to: '/files', label: '我的文件', icon: '📁' },
-    { to: '/downloads', label: '离线下载', icon: '⬇️' },
-    { to: '/video', label: 'yt下载', icon: '🎬' },
-    { to: '/shares', label: '分享管理', icon: '🔗' },
-    { to: '/trash', label: '垃圾桶', icon: '🗑️' },
-    { to: '/settings', label: '设置', icon: '⚙️' },
+const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }> = [
+    { to: '/files', label: '我的文件', icon: FolderOpen },
+    { to: '/downloads', label: '离线下载', icon: CloudDownload, end: true },
+    { to: '/video', label: 'yt下载', icon: Youtube },
+    { to: '/shares', label: '分享管理', icon: Link2 },
+    { to: '/trash', label: '垃圾桶', icon: Trash2 },
+    { to: '/settings', label: '设置', icon: Settings },
 ];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
     return (
         <nav className="flex flex-col gap-0.5">
             {NAV.map((n) => (
-                <div key={n.to}>
-                    {n.section && (
-                        <div className="px-3 pt-3 pb-1 text-xs font-bold text-ink-soft">
-                            {n.section}
-                        </div>
-                    )}
-                    <NavLink
-                        to={n.to}
-                        end={n.end}
-                        onClick={onNavigate}
-                        className={({ isActive }) =>
-                            cn(
-                                'flex items-center gap-2.5 px-3.5 py-2 rounded-full font-bold text-sm transition-colors',
-                                isActive
-                                    ? 'bg-leaf text-white'
-                                    : 'text-ink hover:bg-paper-2',
-                            )
-                        }
-                    >
-                        <span className="text-base">{n.icon}</span>
-                        {n.label}
-                    </NavLink>
-                </div>
+                <NavLink
+                    key={n.to}
+                    to={n.to}
+                    end={n.end}
+                    onClick={onNavigate}
+                    className={({ isActive }) =>
+                        cn(
+                            'flex items-center gap-2.5 px-3.5 py-2 rounded-full font-bold text-sm transition-colors',
+                            isActive ? 'bg-leaf text-white' : 'text-ink hover:bg-paper-2',
+                        )
+                    }
+                >
+                    <n.icon className="size-4" />
+                    {n.label}
+                </NavLink>
             ))}
         </nav>
     );
@@ -65,7 +70,7 @@ export default function Layout({
     const toggleTheme = () => {
         const next: Theme = theme === 'light' ? 'dark' : 'light';
         setTheme(next);
-        applyTheme(next);
+        applyTheme(next, true);
     };
 
     const logout = async () => {
@@ -81,16 +86,16 @@ export default function Layout({
     const sidebarInner = (
         <>
             <div className="px-3 text-xl font-extrabold text-leaf-dark flex items-center gap-2">
-                🏝️ PocketDrive
+                <TreePalm className="size-5" /> PocketDrive
             </div>
-            <div className="flex-1 overflow-y-auto mt-3 -mx-1 px-1">
+            <div className="flex-1 overflow-y-auto mt-4 -mx-1 px-1">
                 <NavList onNavigate={() => setMobileOpen(false)} />
             </div>
-            <div className="pt-3 border-t-2 border-dashed border-line flex items-center gap-2 px-2">
+            <div className="pt-3 border-t border-line/70 flex items-center gap-2 px-2">
                 <span className="text-xl">{profile.avatar}</span>
                 <span className="flex-1 text-sm font-bold truncate">{profile.user}</span>
-                <Button variant="ghost" size="sm" onClick={logout}>
-                    退出
+                <Button variant="ghost" size="sm" onClick={logout} aria-label="退出登录">
+                    <LogOut className="size-3.5" /> 退出
                 </Button>
             </div>
         </>
@@ -99,7 +104,7 @@ export default function Layout({
     return (
         <div className="min-h-screen flex">
             {/* 桌面侧栏 */}
-            <aside className="hidden md:flex flex-col w-56 shrink-0 sticky top-0 h-screen bg-paper border-r-2 border-dashed border-line p-4">
+            <aside className="hidden md:flex flex-col w-56 shrink-0 sticky top-0 h-screen bg-paper border-r border-line/70 p-4">
                 {sidebarInner}
             </aside>
 
@@ -126,7 +131,7 @@ export default function Layout({
 
             <div className="flex-1 min-w-0 flex flex-col">
                 {/* 顶栏:搜索 + 主题切换 */}
-                <header className="sticky top-0 z-30 bg-paper/90 backdrop-blur border-b-2 border-dashed border-line">
+                <header className="sticky top-0 z-30 bg-paper/90 backdrop-blur border-b border-line/70">
                     <div className="max-w-5xl mx-auto flex items-center gap-3 px-4 py-2.5">
                         <button
                             className="md:hidden text-ink"
@@ -135,9 +140,7 @@ export default function Layout({
                         >
                             <Menu className="size-5" />
                         </button>
-                        <span className="md:hidden font-extrabold text-leaf-dark">
-                            🏝️
-                        </span>
+                        <TreePalm className="md:hidden size-5 text-leaf-dark" />
                         <div className="flex-1 flex justify-center">
                             <SearchBox />
                         </div>

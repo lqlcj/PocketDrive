@@ -1,15 +1,21 @@
 # PocketDrive 部署:pocketdrive + aria2 两个容器,共享同一个 /data(整个网盘目录)
+#
+# 两种用法:
+#   A. 直接用官方镜像(推荐,VPS 上无需编译):保持 image 行不动
+#   B. 自己改了代码想本地构建:注释掉 image 行,取消 build 三行的注释
+#
 # 使用前:把 ARIA2_SECRET 和 POCKETDRIVE_ADMIN_PASSWORD 改成自己的值
 # (或在同目录建 .env 文件写入这两个变量)
 services:
     pocketdrive:
-        build:
-            context: ..
-            dockerfile: docker/Dockerfile
+        image: ghcr.io/lqlcj/pocketdrive:latest
+        # build:
+        #     context: ..
+        #     dockerfile: docker/Dockerfile
         container_name: pocketdrive
         restart: unless-stopped
         ports:
-            - '8080:8080'
+            - '16688:16688'
         environment:
             - POCKETDRIVE_DATA_DIR=/data
             - POCKETDRIVE_DB=/config/pocketdrive.db
@@ -31,6 +37,7 @@ services:
         restart: unless-stopped
         environment:
             - RPC_SECRET=${ARIA2_SECRET:-changeme}
+            # BT 监听端口(需要在防火墙放行 TCP+UDP,不开也能下载只是慢)
             - LISTEN_PORT=6888
             # 2G VPS 资源限制
             - MAX_CONCURRENT_DOWNLOADS=3

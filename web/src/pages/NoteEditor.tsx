@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { NotebookPen } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import { Button } from '../components/ui/button';
@@ -61,7 +62,7 @@ export default function NoteEditor() {
     }, [save]);
 
     if (text === null) {
-        return <div className="text-center text-ink-soft py-16">📔 加载中…</div>;
+        return <div className="text-center text-ink-soft py-16">加载中…</div>;
     }
 
     const parentDir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -69,7 +70,10 @@ export default function NoteEditor() {
     return (
         <div className="flex flex-col h-[calc(100vh-120px)]">
             <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <h2 className="text-lg font-extrabold truncate">📝 {name}</h2>
+                <h2 className="text-lg font-extrabold truncate flex items-center gap-2">
+                    <NotebookPen className="size-4.5 text-leaf-dark shrink-0" />
+                    <span className="truncate">{name}</span>
+                </h2>
                 {dirty && <span className="text-xs text-amber-600 font-bold">未保存</span>}
                 <div className="ml-auto flex gap-2">
                     {/* 手机端 tab 切换 */}

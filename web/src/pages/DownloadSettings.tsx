@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { ArrowLeft, Folder, Globe, Magnet, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { DownloadSettings as DS } from '../api';
@@ -74,11 +75,11 @@ export default function DownloadSettings() {
     };
 
     if (!s) {
-        return <div className="text-center text-ink-soft py-16">⚙️ 加载中…</div>;
+        return <div className="text-center text-ink-soft py-16">加载中…</div>;
     }
 
     const row = (label: string, control: ReactNode, hint?: string) => (
-        <div className="py-2.5 border-b border-dashed border-line last:border-b-0">
+        <div className="py-2.5 border-b border-line/50 last:border-b-0">
             <div className="flex items-center gap-3 flex-wrap">
                 <span className="font-bold text-sm min-w-36">{label}</span>
                 {control}
@@ -90,14 +91,21 @@ export default function DownloadSettings() {
     return (
         <div>
             <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-xl font-extrabold">⚙️ 下载设置</h2>
+                <h2 className="text-xl font-extrabold flex items-center gap-2">
+                    <Settings2 className="size-5 text-leaf-dark" /> 下载设置
+                </h2>
                 <Link to="/downloads" className="ml-auto">
-                    <Button size="sm">← 返回下载</Button>
+                    <Button size="sm">
+                        <ArrowLeft className="size-3.5" /> 返回下载
+                    </Button>
                 </Link>
             </div>
 
             <Card>
-                <CardTitle>🌐 全局(保存后即时生效,无需重启 aria2)</CardTitle>
+                <CardTitle>
+                    <Globe className="size-4 text-leaf-dark" />
+                    全局(保存后即时生效,无需重启 aria2)
+                </CardTitle>
                 {row(
                     '最大同时下载数',
                     <NativeSelect
@@ -113,7 +121,7 @@ export default function DownloadSettings() {
                     '2G 内存 VPS 建议 3 个以内',
                 )}
                 {row(
-                    '📥 最大下载速度',
+                    '最大下载速度',
                     <NativeSelect
                         value={s.maxDownloadLimit}
                         onChange={(e) => setS({ ...s, maxDownloadLimit: e.target.value })}
@@ -126,7 +134,7 @@ export default function DownloadSettings() {
                     </NativeSelect>,
                 )}
                 {row(
-                    '📤 最大上传速度',
+                    '最大上传速度',
                     <NativeSelect
                         value={s.maxUploadLimit}
                         onChange={(e) => setS({ ...s, maxUploadLimit: e.target.value })}
@@ -142,9 +150,12 @@ export default function DownloadSettings() {
             </Card>
 
             <Card className="mt-4">
-                <CardTitle>🧲 BT 任务(对新添加的任务生效)</CardTitle>
+                <CardTitle>
+                    <Magnet className="size-4 text-leaf-dark" />
+                    BT 任务(对新添加的任务生效)
+                </CardTitle>
                 {row(
-                    '🌱 做种策略',
+                    '做种策略',
                     <NativeSelect
                         value={String(s.seedTimeMin)}
                         onChange={(e) => setS({ ...s, seedTimeMin: parseInt(e.target.value, 10) })}
@@ -157,7 +168,7 @@ export default function DownloadSettings() {
                     </NativeSelect>,
                 )}
                 {row(
-                    '🔄 Tracker 列表',
+                    'Tracker 列表',
                     <div className="flex items-center gap-3 flex-wrap">
                         <Checkbox
                             label="每日自动更新"
@@ -180,10 +191,13 @@ export default function DownloadSettings() {
             </Card>
 
             <Card className="mt-4">
-                <CardTitle>📁 默认下载目录</CardTitle>
+                <CardTitle>
+                    <Folder className="size-4 text-leaf-dark" /> 默认下载目录
+                </CardTitle>
                 <div className="flex items-center gap-2 flex-wrap">
-                    <span className="bg-paper-2 rounded-full px-3.5 py-1.5 text-sm">
-                        📂 {s.defaultDir === '' ? '根目录' : s.defaultDir}
+                    <span className="bg-paper-2 rounded-full px-3.5 py-1.5 text-sm inline-flex items-center gap-1.5">
+                        <Folder className="size-3.5 text-ink-soft" />
+                        {s.defaultDir === '' ? '根目录' : s.defaultDir}
                     </span>
                     <Button size="sm" onClick={() => setPickerOpen(true)}>
                         选择目录

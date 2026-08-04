@@ -5,7 +5,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
     return (
         <input
             className={cn(
-                'h-9 w-full rounded-full border-2 border-line bg-paper px-3.5 text-sm text-ink placeholder:text-ink-soft/70 outline-none transition-colors focus:border-leaf disabled:opacity-50',
+                'h-9 w-full rounded-full border border-line bg-paper px-3.5 text-sm text-ink placeholder:text-ink-soft/70 outline-none transition-[border-color,box-shadow] focus:border-leaf focus:ring-2 focus:ring-leaf/25 disabled:opacity-50',
                 className,
             )}
             {...props}
@@ -20,7 +20,7 @@ export function Textarea({
     return (
         <textarea
             className={cn(
-                'w-full rounded-2xl border-2 border-line bg-paper p-3 text-sm text-ink placeholder:text-ink-soft/70 outline-none transition-colors focus:border-leaf disabled:opacity-50 resize-none',
+                'w-full rounded-2xl border border-line bg-paper p-3 text-sm text-ink placeholder:text-ink-soft/70 outline-none transition-[border-color,box-shadow] focus:border-leaf focus:ring-2 focus:ring-leaf/25 disabled:opacity-50 resize-none',
                 className,
             )}
             {...props}
@@ -35,7 +35,7 @@ export function NativeSelect({
     return (
         <select
             className={cn(
-                'h-9 rounded-full border-2 border-line bg-paper px-3 text-sm text-ink outline-none transition-colors focus:border-leaf cursor-pointer',
+                'h-9 rounded-full border border-line bg-paper px-3 text-sm text-ink outline-none transition-[border-color,box-shadow] focus:border-leaf focus:ring-2 focus:ring-leaf/25 cursor-pointer',
                 className,
             )}
             {...props}

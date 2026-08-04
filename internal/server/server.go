@@ -103,6 +103,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 
 	api.HandleFunc("GET /api/v1/downloads", d.Aria2.HandleList)
 	api.HandleFunc("POST /api/v1/downloads", d.Aria2.HandleAdd)
+	api.HandleFunc("POST /api/v1/downloads/torrent", d.Aria2.HandleAddTorrent)
 	api.HandleFunc("POST /api/v1/downloads/pause", d.Aria2.HandlePause)
 	api.HandleFunc("POST /api/v1/downloads/unpause", d.Aria2.HandleUnpause)
 	api.HandleFunc("POST /api/v1/downloads/remove", d.Aria2.HandleRemove)

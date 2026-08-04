@@ -19,7 +19,13 @@ func Err(w http.ResponseWriter, status int, msg string) {
 
 // Decode reads a JSON body capped at 1 MiB.
 func Decode(r *http.Request, v any) error {
-	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
+	return DecodeN(r, v, 1<<20)
+}
+
+// DecodeN reads a JSON body capped at n bytes (for bodies that carry
+// small files, e.g. base64 .torrent uploads).
+func DecodeN(r *http.Request, v any, n int64) error {
+	return json.NewDecoder(io.LimitReader(r.Body, n)).Decode(v)
 }
 
 func ClientIP(r *http.Request) string {

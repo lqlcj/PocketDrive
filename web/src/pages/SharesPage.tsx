@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { Share } from '../api';
@@ -44,7 +45,9 @@ export default function SharesPage() {
 
     return (
         <div>
-            <h2 className="text-xl font-extrabold mb-4">🔗 分享管理</h2>
+            <h2 className="text-xl font-extrabold mb-4 flex items-center gap-2">
+                <Link2 className="size-5 text-leaf-dark" /> 分享管理
+            </h2>
             {loading ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">加载中…</Card>
             ) : shares.length === 0 ? (
@@ -56,7 +59,7 @@ export default function SharesPage() {
                     {shares.map((s) => (
                         <div
                             key={s.id}
-                            className="flex items-center gap-2.5 px-4 py-2.5 border-b border-dashed border-line last:border-b-0 flex-wrap"
+                            className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line/50 last:border-b-0 flex-wrap"
                         >
                             <Badge tone={s.type === 'direct' ? 'blue' : 'green'}>
                                 {s.type === 'direct' ? '直链' : '分享页'}
@@ -66,9 +69,15 @@ export default function SharesPage() {
                                 <div className="text-xs text-ink-soft truncate">
                                     {shareLink(s)}
                                 </div>
-                                <div className="text-xs text-ink-soft">
-                                    {s.hasPassword ? '🔒 有密码' : '公开'} ·{' '}
-                                    {s.expiresAt ? `${formatTime(s.expiresAt)} 过期` : '永久'} ·{' '}
+                                <div className="text-xs text-ink-soft flex items-center gap-1 flex-wrap">
+                                    {s.hasPassword ? (
+                                        <span className="inline-flex items-center gap-0.5">
+                                            <Lock className="size-3" /> 有密码
+                                        </span>
+                                    ) : (
+                                        '公开'
+                                    )}{' '}
+                                    · {s.expiresAt ? `${formatTime(s.expiresAt)} 过期` : '永久'} ·{' '}
                                     {formatTime(s.createdAt)} 创建
                                 </div>
                             </div>

@@ -2,19 +2,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* 主题:白天(Claude 风象牙白 + 赤陶橙) / 黑夜(暖炭色) */
+/* 主题:白天(压暗的暖沙色,不刺眼) / 黑夜(暖炭色) */
 :root {
-    --background: #faf9f5;
-    --paper: #ffffff;
-    --paper-2: #f0eee6;
+    --background: #e3ddd0;
+    --paper: #efeadf;
+    --paper-2: #dbd4c4;
     --ink: #3d3929;
-    --ink-soft: #87837a;
-    --line: #e8e4da;
+    --ink-soft: #7d766a;
+    --line: #cdc5b2;
     --leaf: #d97757;
-    --leaf-dark: #b4552d;
-    --leaf-soft: #f6e8e2;
+    --leaf-dark: #a8502e;
+    --leaf-soft: #e9d5c8;
     --danger: #c0392b;
-    --danger-soft: #fdeceb;
+    --danger-soft: #eed9d3;
 }
 
 .dark {
@@ -44,7 +44,8 @@
     --color-danger: var(--danger);
     --color-danger-soft: var(--danger-soft);
     --font-sans: 'Nunito', 'Noto Sans SC', system-ui, sans-serif;
-    --radius-card: 18px;
+    --radius-card: 14px;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 10px rgb(0 0 0 / 0.05);
 }
 
 html {
@@ -55,9 +56,22 @@ html.dark {
     color-scheme: dark;
 }
 
+/* 主题切换瞬间给全站补一层过渡,结束后移除(常驻会拖慢 hover 反馈) */
+html.theme-fade,
+html.theme-fade *,
+html.theme-fade *::before,
+html.theme-fade *::after {
+    transition:
+        background-color 0.35s ease,
+        color 0.35s ease,
+        border-color 0.35s ease,
+        fill 0.35s ease,
+        stroke 0.35s ease,
+        box-shadow 0.35s ease !important;
+}
+
 body {
     @apply bg-background text-ink font-sans min-h-screen;
-    transition: background-color 0.25s ease;
 }
 
 /* markdown 预览排版 */
@@ -73,7 +87,7 @@ body {
 }
 .prose-island h1 {
     font-size: 1.5em;
-    border-bottom: 2px dashed var(--line);
+    border-bottom: 1px solid var(--line);
     padding-bottom: 0.3em;
 }
 .prose-island h2 {
@@ -126,10 +140,59 @@ body {
 }
 .prose-island th,
 .prose-island td {
-    border: 1px dashed var(--line);
+    border: 1px solid var(--line);
     padding: 4px 10px;
 }
 .prose-island img {
     max-width: 100%;
     border-radius: 10px;
+}
+
+/* Office 预览容器 */
+.office-docx {
+    background: #fff;
+    border-radius: 10px;
+    overflow: auto;
+    max-height: 65vh;
+}
+.office-docx .docx-wrapper {
+    background: transparent;
+    padding: 16px;
+}
+.office-docx .docx-wrapper > section.docx {
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.12);
+    margin-bottom: 16px;
+    width: auto !important;
+    padding: 24px !important;
+    min-height: auto !important;
+}
+.office-sheet {
+    max-height: 65vh;
+    overflow: auto;
+    border-radius: 10px;
+    background: var(--paper);
+}
+.office-sheet table {
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.office-sheet td,
+.office-sheet th {
+    border: 1px solid var(--line);
+    padding: 3px 8px;
+    min-width: 40px;
+}
+.office-pptx {
+    max-height: 65vh;
+    overflow: auto;
+    border-radius: 10px;
+    background: var(--paper-2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.office-pptx > div {
+    margin: 8px 0;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.15);
 }
