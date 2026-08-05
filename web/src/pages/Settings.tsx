@@ -279,10 +279,8 @@ export default function Settings({
         <div>
             <h2 className="text-xl font-extrabold mb-4">设置</h2>
 
-            {/* 两列各自成流:卡片高度悬殊时不会互相拉出空洞 */}
-            <div className="grid md:grid-cols-2 gap-3 items-start">
-                {/* 左列:账户、备份与升级 */}
-                <div className="flex flex-col gap-3">
+            {/* 两两成对:同一行的两张卡片等高,底部对齐、间距一致 */}
+            <div className="grid md:grid-cols-2 gap-3">
                     <Card className="p-3">
                         <CardTitle className="mb-2">个人资料</CardTitle>
                         <div className="flex items-center gap-2.5">
@@ -375,19 +373,6 @@ export default function Settings({
                         <p className="text-xs text-ink-soft mt-2">备份包里含存储策略的密钥,请妥善保管</p>
                     </Card>
 
-                    <Card>
-                        <CardTitle>PocketDrive 更新</CardTitle>
-                        <p className="text-sm text-ink-soft mb-2.5">从官方镜像拉取最新版本并重建容器。网盘文件、配置和密码保存在持久化卷中,不会被更新删除。</p>
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <Button size="sm" variant="primary" disabled={updateEnabled !== true || updating} onClick={() => setUpdateOpen(true)}>{updating ? '升级中…' : '检查并升级'}</Button>
-                            {updateEnabled === false && <span className="text-xs text-ink-soft">当前编排未启用安全更新服务,请在 1Panel 中拉取镜像并重建</span>}
-                            {updateEnabled === true && <span className="text-xs text-ink-soft">升级前需要再次输入当前密码确认</span>}
-                        </div>
-                    </Card>
-                </div>
-
-                {/* 右列:组件与日志 */}
-                <div className="flex flex-col gap-3">
                     <Card>
                         <CardTitle>组件状态</CardTitle>
                         {comps === null ? (
@@ -493,7 +478,17 @@ export default function Settings({
                     </Card>
 
                     <ErrorLogCard />
-                </div>
+
+                    {/* 5 张卡片里更新占整行,避免出现孤立的半个空位 */}
+                    <Card className="md:col-span-2">
+                        <CardTitle>PocketDrive 更新</CardTitle>
+                        <p className="text-sm text-ink-soft mb-2.5">从官方镜像拉取最新版本并重建容器。网盘文件、配置和密码保存在持久化卷中,不会被更新删除。</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <Button size="sm" variant="primary" disabled={updateEnabled !== true || updating} onClick={() => setUpdateOpen(true)}>{updating ? '升级中…' : '检查并升级'}</Button>
+                            {updateEnabled === false && <span className="text-xs text-ink-soft">当前编排未启用安全更新服务,请在 1Panel 中拉取镜像并重建</span>}
+                            {updateEnabled === true && <span className="text-xs text-ink-soft">升级前需要再次输入当前密码确认</span>}
+                        </div>
+                    </Card>
             </div>
 
             <Dialog open={updateOpen} onOpenChange={(o) => { if (!o && !updating) { setUpdateOpen(false); setUpdatePassword(''); } }}>
