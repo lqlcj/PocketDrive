@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Cloud, Home } from 'lucide-react';
-import { api } from '../api';
 import { EntryIcon } from './KindIcon';
 import { dropReject, readPaths, useDragPayload } from '../lib/dnd';
+import { fetchList, prefetchList } from '../lib/listcache';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -41,21 +41,23 @@ export default function FileTree({
     const springTimer = useRef(0);
     const springFor = useRef<string | null>(null);
 
-    const load = useCallback((p: string) => {
-        api.listFiles(p)
-            .then((r) =>
+    // 和右侧文件列表共用一份缓存:刚在右边进过的目录,树这边直接命中
+    const load = useCallback((p: string, force = false) => {
+        fetchList(p, force)
+            .then((entries) =>
                 setChildren((prev) => ({
                     ...prev,
-                    [p]: r.entries.filter((e) => e.dir).map((e) => e.name),
+                    [p]: entries.filter((e) => e.dir).map((e) => e.name),
                 })),
             )
             .catch(() => undefined);
     }, []);
 
-    // 刷新:重载根 + 所有已展开的节点
+    // 刷新:重载根 + 所有已展开的节点。只有写操作(新建/删除/移动)会
+    // 让 refreshKey 变——单纯换目录不该把整棵树重拉一遍。
     useEffect(() => {
-        load('');
-        expanded.forEach((p) => p !== '' && load(p));
+        load('', true);
+        expanded.forEach((p) => p !== '' && load(p, true));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [refreshKey]);
 
@@ -232,6 +234,7 @@ export default function FileTree({
                     <button
                         className="flex items-center gap-1.5 flex-1 min-w-0 py-1.5 text-left cursor-pointer"
                         onClick={() => onNavigate(p)}
+                        onMouseEnter={() => prefetchList(p)}
                         title={name}
                     >
                         {p === '' ? (

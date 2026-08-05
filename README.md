@@ -34,7 +34,9 @@ shadcn 式自研组件 + lucide 图标,后端 Go 单二进制,SQLite 存储元�
 - **离线下载**:aria2 承载,http(s)/ftp 直链、磁力,以及**上传 .torrent 种子文件**;
   「下载设置」页网页化管理(并发数/上下行限速即时生效、做种策略、BT tracker 每日自动更新、默认目录)
 - **yt下载**:yt-dlp 网页端;画质预设(最佳/1080p/720p/480p)、仅音频(m4a/mp3)、
-  嵌入封面/元数据、中英字幕、**播放列表批量下载**(存进播放列表名子文件夹,文件名带序号)
+  嵌入封面/元数据、中英字幕、**播放列表批量下载**(存进播放列表名子文件夹,文件名带序号);
+  「高级设置」可传 YouTube cookies、配代理、换 player client——机房 IP 被判定为机器人
+  (`Sign in to confirm you're not a bot`)时靠这个绕过
 - **动画登录页**:一群会盯着你鼠标看的小家伙,输密码时集体扭头回避
   (移植自 [animatedlogin-react](https://github.com/Keduoli03/animatedlogin-react),MIT)
 - **黑夜模式**:暖沙 / 暖炭双主题(Claude 风配色),切换带过渡动画
@@ -96,8 +98,16 @@ services:
             # BT 监听端口(可选,不开也能下载)
             - LISTEN_PORT=6888
             - MAX_CONCURRENT_DOWNLOADS=3
+            # 这三行不能省:镜像默认让 aria2c 以 nobody(65534)运行,
+            # 写不进 PocketDrive 以 root 建的目录,表现为下载任务报
+            # "Permission denied" 或 "Download aborted."
+            - PUID=0
+            - PGID=0
+            - UMASK_SET=022
         volumes:
             - ./data:/data
+            # 挂出来,容器重启后没下完的任务还能接着下
+            - ./config/aria2:/config
         ports:
             - '6888:6888'
             - '6888:6888/udp'
@@ -241,6 +251,35 @@ cd web; npm install; npm run dev
 - aria2/yt-dlp 均 exec 直调不经 shell;URL 按协议白名单校验;yt-dlp 参数只来自固定预设模板;
   上传的 .torrent 做 bencode 头校验 + 16MB 上限
 - Office 预览为纯前端渲染(docx-preview / SheetJS / pptx-preview 动态加载),后端不解析文档
+
+## 常见问题
+
+**离线下载报 `Download aborted.`,BT 报 `Failed to make the directory ..., cause: Permission denied`**
+
+aria2 容器写不进网盘目录。`p3terx/aria2-pro` 镜像里 aria2c 固定以 `p3terx`
+用户运行,不设 `PUID`/`PGID` 时它是 **65534(nobody)**;而 PocketDrive 以 root
+建目录(`root:root 0755`),nobody 自然写不进去。`Download aborted.` 是 aria2
+建文件失败时的外层文案,真正的原因不会经 RPC 传出来,所以看着像另一个问题。
+
+修法:给 aria2 服务加上 `PUID=0` / `PGID=0` 后 `docker compose up -d`,
+或者直接重跑一次安装脚本(见上面的「方式一:VPS 一键安装」)。
+
+**yt下载报 `Sign in to confirm you're not a bot`**
+
+YouTube 把机房 IP 当成了机器人。到「yt下载 → 高级设置」传一份浏览器导出的
+cookies.txt:用 cookies.txt 导出插件,在**无痕窗口**登录 YouTube 后打开
+`youtube.com/robots.txt`,导出 youtube.com 的 cookies,然后**关掉那个无痕窗口**
+(不关的话 YouTube 会把这份 cookie 轮换掉,导出的就失效了)。建议用小号——
+yt-dlp 官方 wiki 明确提示账号有被封的风险。
+
+cookies 存在服务器的配置目录里(和数据库同级),不进网盘、不进 WebDAV。
+同一页还能配代理和 player client,都不行时可以先去设置页把 yt-dlp 升到最新版。
+
+**复制按钮点了没反应/提示复制失败**
+
+`navigator.clipboard` 只在 HTTPS(或 localhost)下存在,用 `http://IP:16688`
+访问时是 undefined。已改为自动退回 `execCommand('copy')`;如果浏览器把它也禁了,
+就只能手动选中链接复制,或者给站点配个域名 + HTTPS。
 
 ## 已知限制(后续候选)
 

@@ -70,6 +70,22 @@ export function browserPlayable(name: string): boolean {
     return ['mp4', 'webm', 'm4v', 'mov', 'ogg'].includes(ext);
 }
 
+/**
+ * 直链里文件名那一段的转义。
+ *
+ * encodeURIComponent 会把「我的壁纸.png」变成一长串 %E6%88%91…,难看
+ * 也难认。name 段对后端毫无意义(token 才是凭证,name 只是让播放器/
+ * 下载工具按后缀识别类型),所以这里只转义真正会破坏 URL 结构的字符,
+ * 中文原样保留——和浏览器地址栏显示 URL 的做法一致。
+ *
+ *   % 必须先转,否则原本就带 % 的文件名会被当成转义序列
+ *   # ? 会截断路径;空格在很多地方会被当成分隔符
+ *   / 已经不可能出现(name 是最后一段),仍然转一道保险
+ */
+function encodeNameSegment(name: string): string {
+    return name.replace(/[%#?/\s]/g, (ch) => encodeURIComponent(ch));
+}
+
 // 分享链接:直链在 token 后带上真实文件名段(/d/xxx/歌.mp3),
 // 播放器/下载工具靠 URL 后缀识别类型;token 本身仍是唯一凭证
 export function shareLink(s: { token: string; type: string; path: string }): string {
@@ -77,7 +93,7 @@ export function shareLink(s: { token: string; type: string; path: string }): str
         const name = s.path.includes('/')
             ? s.path.slice(s.path.lastIndexOf('/') + 1)
             : s.path;
-        return `${window.location.origin}/d/${s.token}/${encodeURIComponent(name)}`;
+        return `${window.location.origin}/d/${s.token}/${encodeNameSegment(name)}`;
     }
     return `${window.location.origin}/s/${s.token}`;
 }
@@ -103,6 +119,11 @@ export function extractable(name: string): boolean {
  * navigator.clipboard 只在 secure context 里存在——用 http://IP:16688
  * 直接访问自己 VPS 时它是 undefined,直接用会抛 TypeError。这里退回到
  * 老的 execCommand('copy'),两条路都不通才报失败。
+ *
+ * 兜底那条路有个坑:临时 textarea 如果挂在 document.body 上,而当前
+ * 正开着 Radix 的 Dialog,Dialog 的焦点陷阱会立刻把焦点抢回去、选区
+ * 随之作废,execCommand 复制到的是空串。所以要把它挂进最上层那个
+ * dialog 里。
  */
 export async function copyText(text: string): Promise<boolean> {
     try {
@@ -114,16 +135,22 @@ export async function copyText(text: string): Promise<boolean> {
         // 落到下面的兜底
     }
     try {
+        const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"]');
+        const host = dialogs.length > 0 ? dialogs[dialogs.length - 1]! : document.body;
         const ta = document.createElement('textarea');
         ta.value = text;
         // 不能用 display:none,否则选不中
         ta.style.position = 'fixed';
         ta.style.top = '-9999px';
+        ta.style.opacity = '0';
         ta.setAttribute('readonly', '');
-        document.body.appendChild(ta);
+        host.appendChild(ta);
+        ta.focus();
         ta.select();
+        // iOS Safari 不认 select(),要显式给范围
+        ta.setSelectionRange(0, text.length);
         const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
+        host.removeChild(ta);
         return ok;
     } catch {
         return false;

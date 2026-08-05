@@ -58,6 +58,12 @@ export interface YtdlpOptions {
     playlist?: boolean;
 }
 
+/** yt下载的高级设置:机房 IP 被 YouTube 判定为机器人时要用 */
+export interface YtdlpSettings {
+    proxy: string;
+    playerClient: string;
+}
+
 export interface YtdlpTask {
     id: number;
     url: string;
@@ -367,6 +373,21 @@ export const api = {
         post<{ ok: boolean }>('/api/v1/ytdlp', { url, dir, preset, options }),
     cancelYtdlp: (id: number) => post<{ ok: boolean }>('/api/v1/ytdlp/cancel', { id }),
     deleteYtdlp: (id: number) => post<{ ok: boolean }>('/api/v1/ytdlp/delete', { id }),
+    ytdlpSettings: () =>
+        req<{
+            settings: YtdlpSettings;
+            hasCookies: boolean;
+            cookiesUpdated: string;
+            cookiesSupported: boolean;
+        }>('/api/v1/ytdlp/settings'),
+    saveYtdlpSettings: (s: YtdlpSettings) =>
+        post<{ ok: boolean }>('/api/v1/ytdlp/settings', s),
+    /** content 传空串 = 删除已保存的 cookies */
+    setYtdlpCookies: (content: string) =>
+        post<{ ok: boolean; hasCookies: boolean; cookiesUpdated: string }>(
+            '/api/v1/ytdlp/cookies',
+            { content },
+        ),
 
     shares: () => req<{ shares: Share[] }>('/api/v1/shares'),
     createShare: (path: string, password: string, type: string, expiresHours: number) =>

@@ -35,7 +35,9 @@ type Settings struct {
 	DefaultDir       string `json:"defaultDir"`  // 默认保存目录(相对网盘根)
 }
 
-// 2G VPS 的最优默认:3 并发、不限速、下载完即停止做种、tracker 自动更新
+// 2G VPS 的最优默认:3 并发、不限速、下载完即停止做种、tracker 自动更新。
+// 默认保存目录是网盘根目录——早期版本默认 "downloads",但网盘本身就是
+// 一棵目录树,没必要再造一个固定的收纳夹。
 func defaultSettings() Settings {
 	return Settings{
 		MaxConcurrent:    3,
@@ -43,7 +45,7 @@ func defaultSettings() Settings {
 		MaxUploadLimit:   "0",
 		SeedTimeMin:      0,
 		TrackerAuto:      true,
-		DefaultDir:       "downloads",
+		DefaultDir:       "",
 	}
 }
 

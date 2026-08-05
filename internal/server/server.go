@@ -145,6 +145,10 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("POST /api/v1/ytdlp", d.Ytdlp.HandleAdd)
 	api.HandleFunc("POST /api/v1/ytdlp/cancel", d.Ytdlp.HandleCancel)
 	api.HandleFunc("POST /api/v1/ytdlp/delete", d.Ytdlp.HandleDelete)
+	// cookies / 代理 / player client:机房 IP 被 YouTube 判定为机器人时要用
+	api.HandleFunc("GET /api/v1/ytdlp/settings", d.Ytdlp.HandleGetSettings)
+	api.HandleFunc("POST /api/v1/ytdlp/settings", d.Ytdlp.HandleSaveSettings)
+	api.HandleFunc("POST /api/v1/ytdlp/cookies", d.Ytdlp.HandleSetCookies)
 
 	mux.Handle("/api/v1/", d.Auth.Middleware(api))
 

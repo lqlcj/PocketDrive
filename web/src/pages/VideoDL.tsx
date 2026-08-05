@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clapperboard, Folder, FolderOpen, ListVideo, Music } from 'lucide-react';
+import {
+    Clapperboard,
+    Folder,
+    FolderOpen,
+    ListVideo,
+    Music,
+    ChevronDown,
+    ChevronRight,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { YtdlpTask } from '../api';
+import type { YtdlpTask, YtdlpSettings } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input, NativeSelect, Checkbox } from '../components/ui/input';
@@ -33,6 +41,221 @@ const PRESET_LABEL: Record<string, string> = {
     video: '最佳画质 (mp4)',
     audio: '仅音频 (m4a)',
 };
+
+// --extractor-args youtube:player_client= 的候选。不同客户端对 PO Token
+// 和账号 cookie 的要求不一样,YouTube 还时不时改规则,所以留给用户试。
+const PLAYER_CLIENTS = [
+    { key: '', label: '默认(由 yt-dlp 自己挑)' },
+    { key: 'tv', label: 'tv(配 cookies 时通常最稳)' },
+    { key: 'tv_simply', label: 'tv_simply(不支持账号 cookies)' },
+    { key: 'web_safari', label: 'web_safari' },
+    { key: 'mweb', label: 'mweb' },
+    { key: 'ios', label: 'ios(不支持账号 cookies)' },
+    { key: 'android_vr', label: 'android_vr(不支持账号 cookies)' },
+    { key: 'web_embedded', label: 'web_embedded(仅可嵌入的视频)' },
+];
+
+/**
+ * 高级设置:cookies / 代理 / 播放器客户端。
+ *
+ * 存在的理由是 YouTube 对机房 IP 的反机器人策略——VPS 上直接下会报
+ * "Sign in to confirm you're not a bot",官方给的可行解法就是带上浏览器
+ * 导出的 cookies。cookies 存在服务器的配置目录里(和数据库同级),不进
+ * 网盘、不进 WebDAV、不会被整盘导出带走。
+ */
+function Advanced() {
+    const [open, setOpen] = useState(false);
+    const [settings, setSettings] = useState<YtdlpSettings>({ proxy: '', playerClient: '' });
+    const [hasCookies, setHasCookies] = useState(false);
+    const [cookiesUpdated, setCookiesUpdated] = useState('');
+    const [supported, setSupported] = useState(true);
+    const [cookieText, setCookieText] = useState('');
+    const [busy, setBusy] = useState(false);
+    const fileRef = useRef<HTMLInputElement>(null);
+
+    const load = useCallback(() => {
+        api.ytdlpSettings()
+            .then((r) => {
+                setSettings(r.settings);
+                setHasCookies(r.hasCookies);
+                setCookiesUpdated(r.cookiesUpdated);
+                setSupported(r.cookiesSupported);
+            })
+            .catch(() => undefined);
+    }, []);
+
+    useEffect(() => {
+        if (open) load();
+    }, [open, load]);
+
+    const save = async () => {
+        setBusy(true);
+        try {
+            await api.saveYtdlpSettings(settings);
+            toast.success('已保存');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '保存失败');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const saveCookies = async (content: string) => {
+        setBusy(true);
+        try {
+            const r = await api.setYtdlpCookies(content);
+            setHasCookies(r.hasCookies);
+            setCookiesUpdated(r.cookiesUpdated ?? '');
+            setCookieText('');
+            toast.success(content.trim() ? 'cookies 已保存' : 'cookies 已删除');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '保存失败');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const onFile = async (f: File | undefined) => {
+        if (!f) return;
+        if (f.size > 1 << 20) {
+            toast.error('文件太大了,cookies.txt 不该有 1MB');
+            return;
+        }
+        await saveCookies(await f.text());
+        if (fileRef.current) fileRef.current.value = '';
+    };
+
+    return (
+        <Card className="mb-4">
+            <button
+                className="flex items-center gap-1.5 text-sm font-bold cursor-pointer w-full text-left"
+                onClick={() => setOpen((v) => !v)}
+            >
+                {open ? (
+                    <ChevronDown className="size-4" />
+                ) : (
+                    <ChevronRight className="size-4" />
+                )}
+                高级设置
+                {hasCookies && <Badge tone="green">已配置 cookies</Badge>}
+                {settings.proxy && <Badge tone="blue">代理</Badge>}
+            </button>
+
+            {open && (
+                <div className="mt-3 flex flex-col gap-4">
+                    <div>
+                        <div className="text-sm font-bold mb-1">YouTube cookies</div>
+                        <p className="text-xs text-ink-soft mb-2 leading-relaxed">
+                            报「Sign in to confirm you're not a bot」是因为 YouTube
+                            把机房 IP 当成了机器人,传一份 cookies 就能过。做法:用浏览器的
+                            cookies.txt 导出插件,在
+                            <b>无痕窗口</b>登录 YouTube 后打开{' '}
+                            <code className="bg-paper-2 rounded px-1">
+                                youtube.com/robots.txt
+                            </code>
+                            ,导出 youtube.com 的 cookies,然后<b>关掉那个无痕窗口</b>
+                            (不关的话 YouTube 会把这份 cookie 轮换掉)。建议用小号。
+                        </p>
+                        <div className="text-xs mb-2">
+                            {!supported ? (
+                                <span className="text-ink-soft">
+                                    当前部署没有配置目录,存不了 cookies
+                                </span>
+                            ) : hasCookies ? (
+                                <span className="text-leaf-dark">
+                                    已保存
+                                    {cookiesUpdated && `(${formatTime(cookiesUpdated)})`}
+                                </span>
+                            ) : (
+                                <span className="text-ink-soft">未配置</span>
+                            )}
+                        </div>
+                        <textarea
+                            className="w-full h-24 bg-paper-2 rounded-xl p-2.5 text-[11px] font-mono resize-y outline-none border border-line/70 focus:border-leaf"
+                            placeholder="把 cookies.txt 的内容整个粘贴进来,或用下面的按钮选文件"
+                            value={cookieText}
+                            disabled={!supported}
+                            onChange={(e) => setCookieText(e.target.value)}
+                        />
+                        <div className="flex gap-2 mt-2 flex-wrap">
+                            <Button
+                                variant="primary"
+                                size="sm"
+                                disabled={busy || !supported || !cookieText.trim()}
+                                onClick={() => saveCookies(cookieText)}
+                            >
+                                保存 cookies
+                            </Button>
+                            <Button
+                                size="sm"
+                                disabled={busy || !supported}
+                                onClick={() => fileRef.current?.click()}
+                            >
+                                选择 cookies.txt
+                            </Button>
+                            {hasCookies && (
+                                <Button
+                                    variant="ghost-danger"
+                                    size="sm"
+                                    disabled={busy}
+                                    onClick={() => saveCookies('')}
+                                >
+                                    删除已保存的
+                                </Button>
+                            )}
+                            <input
+                                ref={fileRef}
+                                type="file"
+                                accept=".txt,text/plain"
+                                className="hidden"
+                                onChange={(e) => void onFile(e.target.files?.[0])}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <div className="text-sm font-bold">代理(可选)</div>
+                        <Input
+                            placeholder="socks5://127.0.0.1:1080 或 http://127.0.0.1:8080,留空为直连"
+                            value={settings.proxy}
+                            onChange={(e) =>
+                                setSettings((s) => ({ ...s, proxy: e.target.value }))
+                            }
+                        />
+                        <p className="text-xs text-ink-soft">
+                            走容器网络,127.0.0.1 指的是 PocketDrive 容器自己;宿主机上的代理要写宿主 IP
+                        </p>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <div className="text-sm font-bold">播放器客户端(可选)</div>
+                        <NativeSelect
+                            value={settings.playerClient}
+                            onChange={(e) =>
+                                setSettings((s) => ({ ...s, playerClient: e.target.value }))
+                            }
+                        >
+                            {PLAYER_CLIENTS.map((c) => (
+                                <option key={c.key} value={c.key}>
+                                    {c.label}
+                                </option>
+                            ))}
+                        </NativeSelect>
+                        <p className="text-xs text-ink-soft">
+                            默认下不去时可以换一个试试;只对 YouTube 生效
+                        </p>
+                    </div>
+
+                    <div>
+                        <Button variant="primary" size="sm" disabled={busy} onClick={save}>
+                            保存代理与客户端
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </Card>
+    );
+}
 
 export default function VideoDL() {
     const navigate = useNavigate();
@@ -181,6 +404,8 @@ export default function VideoDL() {
                 onClose={() => setPickerOpen(false)}
                 onSelect={setDir}
             />
+
+            <Advanced />
 
             {tasks.length === 0 ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">

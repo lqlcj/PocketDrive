@@ -16,7 +16,8 @@ import {
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { ArchiveTask, FileEntry, Share, StoragePolicy } from '../api';
-import { extractable, fileKind, formatBytes, formatTime, shareLink } from '../util';
+import { extractable, fileKind, formatBytes, formatTime, shareLink, copyText } from '../util';
+import { fetchList, invalidateList, peekList, prefetchList } from '../lib/listcache';
 import Preview from '../components/Preview';
 import FolderPicker from '../components/FolderPicker';
 import FileTree from '../components/FileTree';
@@ -145,6 +146,7 @@ function Breadcrumb({
                 to="/files"
                 // 面包屑是落点不是拖手,别让浏览器把它当链接拖起来
                 draggable={false}
+                onMouseEnter={() => prefetchList('')}
                 {...root.handlers}
             >
                 <Home className="size-3.5" /> 根目录
@@ -163,6 +165,7 @@ function Breadcrumb({
                             )}
                             to={`/files/${acc}`}
                             draggable={false}
+                            onMouseEnter={() => prefetchList(acc)}
                             {...d.handlers}
                         >
                             {p}
@@ -291,30 +294,51 @@ export default function Files() {
             .catch(() => undefined);
     }, []);
 
-    const load = useCallback(() => {
-        setLoading(true);
-        api.listFiles(path)
-            .then((r) => {
-                setEntries(r.entries);
-                // 列表变了(移走、删掉、传完),把已经不在的项从选择里剔除
-                const names = new Set(r.entries.map((e) => e.name));
-                setSelected((prev) => {
-                    const next = new Set([...prev].filter((n) => names.has(n)));
-                    return next.size === prev.size ? prev : next;
-                });
-            })
-            .catch((e) => {
-                toast.error(e instanceof Error ? e.message : '加载失败');
-                setEntries([]);
-            })
-            .finally(() => {
+    // 进目录:有缓存就先把旧列表画上去(不转圈),同时后台刷新。
+    // 大部分情况下第二次进同一个目录是瞬间的。
+    const load = useCallback(
+        (force = false) => {
+            const cached = peekList(path);
+            if (cached) {
+                setEntries(cached);
                 setLoading(false);
-                setMoving((prev) => (prev.size === 0 ? prev : new Set()));
-            });
-        setTreeVersion((v) => v + 1);
-    }, [path]);
+            } else {
+                setLoading(true);
+            }
+            fetchList(path, force)
+                .then((entries) => {
+                    setEntries(entries);
+                    // 列表变了(移走、删掉、传完),把已经不在的项从选择里剔除
+                    const names = new Set(entries.map((e) => e.name));
+                    setSelected((prev) => {
+                        const next = new Set([...prev].filter((n) => names.has(n)));
+                        return next.size === prev.size ? prev : next;
+                    });
+                })
+                .catch((e) => {
+                    toast.error(e instanceof Error ? e.message : '加载失败');
+                    setEntries([]);
+                })
+                .finally(() => {
+                    setLoading(false);
+                    setMoving((prev) => (prev.size === 0 ? prev : new Set()));
+                });
+        },
+        [path],
+    );
 
-    useEffect(load, [load]);
+    /**
+     * 写操作之后的刷新:缓存全清 + 强制重拉 + 让左边目录树也跟着更新。
+     * 目录树刷新只挂在这里——以前 load() 里也带着,于是每点一次目录,
+     * 树就把根和所有展开的节点重新请求一遍,进三层目录要等 5 个往返。
+     */
+    const refresh = useCallback(() => {
+        invalidateList();
+        load(true);
+        setTreeVersion((v) => v + 1);
+    }, [load]);
+
+    useEffect(() => load(), [load]);
     useEffect(loadIcons, [loadIcons]);
     useEffect(() => {
         api.storages()
@@ -324,11 +348,22 @@ export default function Files() {
 
     // 有文件传完就刷新列表(上传面板在别的页面也可能传完)
     useEffect(() => {
-        if (completedTick > 0) load();
-    }, [completedTick, load]);
+        if (completedTick > 0) refresh();
+    }, [completedTick, refresh]);
 
     // 换目录、换视图都回到第一页,否则会停在一个空页上
     useEffect(() => setPage(1), [path, view]);
+
+    // 等超过 180ms 才承认「在加载」——快的时候不闪字,慢的时候有反馈
+    const [slow, setSlow] = useState(false);
+    useEffect(() => {
+        if (!loading) {
+            setSlow(false);
+            return;
+        }
+        const t = window.setTimeout(() => setSlow(true), 180);
+        return () => window.clearTimeout(t);
+    }, [loading]);
 
     // 换目录后原来的选择没有意义了
     useEffect(() => {
@@ -384,7 +419,7 @@ export default function Files() {
                     clearInterval(timer);
                     if (t.status === 'done') {
                         toast.success(t.kind === 'compress' ? '压缩完成' : '解压完成');
-                        load();
+                        refresh();
                     } else {
                         toast.error(t.errorMsg || '任务失败');
                     }
@@ -395,7 +430,7 @@ export default function Files() {
                 }
             }, 1000);
         },
-        [load],
+        [refresh],
     );
 
     const doCompress = async () => {
@@ -443,7 +478,7 @@ export default function Files() {
         try {
             await fn();
             close?.();
-            load();
+            refresh();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '操作失败');
         }
@@ -476,7 +511,7 @@ export default function Files() {
                 // 那边已经被改过名或再次移动,放不回去就算了
             }
         }
-        load();
+        refresh();
         if (ok > 0) toast.success(`已放回 ${ok} 项`);
         else toast.error('放不回去了,东西可能已经被改名或再次移动');
     };
@@ -525,7 +560,7 @@ export default function Files() {
                 if (!firstErr) firstErr = e instanceof Error ? e.message : '移动失败';
             }
         }
-        load();
+        refresh();
         setSelected(new Set());
 
         if (done.length > 0) {
@@ -555,18 +590,25 @@ export default function Files() {
         }
     };
 
-    const copyText = async (text: string) => {
-        try {
-            await navigator.clipboard.writeText(text);
-            toast.success('已复制到剪贴板');
-        } catch {
-            toast.warning('复制失败,请手动复制');
-        }
+    // 走 util 里的 copyText:http:// 下 navigator.clipboard 是 undefined,
+    // 那边有 execCommand 兜底(这里以前直接用 clipboard,所以在 VPS 上
+    // 一按就是「复制失败」)
+    const copy = async (text: string) => {
+        if (await copyText(text)) toast.success('已复制到剪贴板');
+        else toast.warning('复制失败,请手动选中链接复制');
     };
 
     const openEntry = (e: FileEntry, idx: number) => {
         if (e.dir) navigate(`/files/${join(e.name)}`);
         else setPreviewIdx(idx);
+    };
+
+    /**
+     * 鼠标扫过文件夹就把它的内容先拉回来。从悬停到点下去通常有几百毫秒,
+     * 够一个往返了——真点进去时列表往往已经在缓存里,不再转圈。
+     */
+    const hoverFolder = (e: FileEntry) => {
+        if (e.dir) prefetchList(join(e.name));
     };
 
     const closeShare = () => {
@@ -960,7 +1002,7 @@ export default function Files() {
                             <List className="size-3.5" />
                         )}
                     </Button>
-                    <Button size="icon-sm" aria-label="刷新" title="刷新" onClick={load}>
+                    <Button size="icon-sm" aria-label="刷新" title="刷新" onClick={refresh}>
                         <RefreshCw className="size-3.5" />
                     </Button>
                 </div>
@@ -1052,9 +1094,10 @@ export default function Files() {
                             dragOver && 'border-leaf border-dashed',
                         )}
                     >
-                        {loading ? (
+                        {loading && entries.length === 0 ? (
                             <div className="text-center text-ink-soft py-10 text-sm">
-                                加载中…
+                                {/* 没到 180ms 就先空着:够快的时候不该闪一下「加载中」*/}
+                                {slow ? '加载中…' : ' '}
                             </div>
                         ) : entries.length === 0 ? (
                             <div className="text-center text-ink-soft py-10 text-sm">
@@ -1093,6 +1136,7 @@ export default function Files() {
                                                 <button
                                                     className="flex items-center gap-2 flex-1 min-w-0 basis-full sm:basis-auto font-bold text-left cursor-pointer truncate"
                                                     onClick={(ev) => onEntryClick(ev, e, idx)}
+                                                    onMouseEnter={() => hoverFolder(e)}
                                                     title={
                                                         e.dir
                                                             ? `${e.name}(可把文件拖进来)`
@@ -1167,6 +1211,7 @@ export default function Files() {
                                                 <button
                                                     className="cursor-pointer text-left"
                                                     onClick={(ev) => onEntryClick(ev, e, idx)}
+                                                    onMouseEnter={() => hoverFolder(e)}
                                                     title={e.name}
                                                 >
                                                     <Thumb
@@ -1506,7 +1551,7 @@ export default function Files() {
                                 <Button
                                     variant="primary"
                                     onClick={() =>
-                                        copyText(
+                                        copy(
                                             shareLink(shareResult) +
                                                 (sharePass && shareResult.type === 'page'
                                                     ? ` 密码: ${sharePass}`

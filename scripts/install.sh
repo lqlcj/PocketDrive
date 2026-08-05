@@ -23,7 +23,7 @@ fi
 docker compose version >/dev/null 2>&1 || die "docker compose 插件不可用,请先安装 docker-compose-plugin"
 
 # ---- 目录与配置 ----
-mkdir -p "$DIR/data" "$DIR/config"
+mkdir -p "$DIR/data" "$DIR/config" "$DIR/config/aria2"
 cd "$DIR"
 
 rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c "$1"; }
@@ -77,8 +77,14 @@ services:
             - RPC_SECRET=\${ARIA2_SECRET}
             - LISTEN_PORT=6888
             - MAX_CONCURRENT_DOWNLOADS=3
+            # 镜像默认让 aria2c 以 nobody(65534)运行,写不进 PocketDrive
+            # 以 root 建的目录;统一成 root 才能共享 /data
+            - PUID=0
+            - PGID=0
+            - UMASK_SET=022
         volumes:
             - ./data:/data
+            - ./config/aria2:/config
         ports:
             - '6888:6888'
             - '6888:6888/udp'

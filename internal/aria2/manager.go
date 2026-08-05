@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ type Manager struct {
 	db       *gorm.DB
 	c        *Client
 	dataRoot string // data dir as seen by the aria2 process
+	localDir string // 同一个网盘目录在 PocketDrive 自己进程里的路径
 	degraded atomic.Bool
 	// 全局设置是否已成功推给 aria2(重连后需要重推)
 	globalsApplied atomic.Bool
@@ -58,11 +61,14 @@ func (m *Manager) Version() string {
 // Degraded 报告 aria2 当前是否不可达。
 func (m *Manager) Degraded() bool { return m.degraded.Load() }
 
-func NewManager(gdb *gorm.DB, c *Client, dataRoot string) *Manager {
+// NewManager:dataRoot 是 aria2 进程眼里的网盘路径,localDir 是同一个
+// 目录在本进程眼里的路径(单容器/本机开发时两者相同)。
+func NewManager(gdb *gorm.DB, c *Client, dataRoot, localDir string) *Manager {
 	return &Manager{
 		db:       gdb,
 		c:        c,
 		dataRoot: dataRoot,
+		localDir: localDir,
 		speeds:   make(map[string]int64),
 		stop:     make(chan struct{}),
 	}
@@ -149,7 +155,7 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	t.Status = st.Status
 	t.TotalLength = parseI64(st.TotalLength)
 	t.CompletedLength = parseI64(st.CompletedLength)
-	t.ErrorMsg = st.ErrorMessage
+	t.ErrorMsg = friendlyErr(st.ErrorMessage)
 	if name := statusName(st); name != "" {
 		t.Name = name
 	}
@@ -225,6 +231,41 @@ func validDownloadDir(relDir string) error {
 	return nil
 }
 
+// ensureDir 由 PocketDrive 自己把目标目录建出来,免得 aria2 去建。
+// 只在 aria2 已经收下任务之后调:add 失败时(比如 aria2 没起来)不该
+// 在用户网盘里留一个空文件夹。aria2 抢先建好了也无所谓,MkdirAll 是
+// 幂等的。
+func (m *Manager) ensureDir(relDir string) {
+	if relDir == "" || m.localDir == "" {
+		return
+	}
+	rel := cleanRel(relDir)
+	if rel == "" || strings.HasPrefix(rel, "@") {
+		return
+	}
+	_ = os.MkdirAll(filepath.Join(m.localDir, filepath.FromSlash(rel)), 0o755)
+}
+
+// friendlyErr 把 aria2 的原始报错翻成能照着做的中文。
+//
+// "Download aborted." 是 aria2 在 RequestGroup::initPieceStorage 里
+// initAndOpenFile() 抛异常时的**外层**文案,真正的原因(多半是
+// Permission denied)只留在 aria2 自己的日志里、不会经 RPC 传出来。
+// 加上 BT 那条明说 Permission denied 的,两者根因是同一个:
+// p3terx/aria2-pro 默认让 aria2c 以 nobody(65534)运行,写不进
+// PocketDrive 以 root 建的目录。
+func friendlyErr(msg string) string {
+	const fix = "(aria2 容器写不进网盘目录:给 aria2 服务加上 PUID=0 / PGID=0 " +
+		"后 docker compose up -d,或直接重跑一次安装脚本)"
+	switch {
+	case strings.Contains(msg, "Permission denied"):
+		return msg + " " + fix
+	case strings.HasPrefix(msg, "Download aborted"):
+		return msg + " 多半是没有写入权限。" + fix
+	}
+	return msg
+}
+
 func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	if err := validURL(rawURL); err != nil {
 		return nil, err
@@ -239,6 +280,7 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())
 	}
 	m.degraded.Store(false)
+	m.ensureDir(relDir)
 	t := db.DownloadTask{GID: gid, URL: rawURL, Dir: relDir, Status: "active"}
 	if err := m.db.Create(&t).Error; err != nil {
 		return nil, err
@@ -265,6 +307,7 @@ func (m *Manager) AddTorrent(torrentB64, relDir, name string) (*db.DownloadTask,
 		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())
 	}
 	m.degraded.Store(false)
+	m.ensureDir(relDir)
 	t := db.DownloadTask{
 		GID: gid, URL: name, Dir: relDir, Status: "active",
 		Name: strings.TrimSuffix(name, ".torrent"),

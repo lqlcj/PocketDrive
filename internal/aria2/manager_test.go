@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pocketdrive/internal/db"
@@ -93,7 +95,8 @@ func newTestManager(t *testing.T) (*Manager, *mockAria2) {
 		}
 	})
 	c := NewClient(srv.URL, "s3cret")
-	return NewManager(gdb, c, "/data"), mock
+	// localDir 指向临时目录:ensureDir 会真的建文件夹,别写到别处去
+	return NewManager(gdb, c, "/data", t.TempDir()), mock
 }
 
 func TestAddAndSync(t *testing.T) {
@@ -191,5 +194,63 @@ func TestValidURL(t *testing.T) {
 		if err := validURL(bad); err == nil {
 			t.Errorf("validURL(%q) = nil, want error", bad)
 		}
+	}
+}
+
+// aria2 报权限错时给的是两句没头没尾的英文,尤其 "Download aborted."
+// 完全看不出跟权限有关(它只是 initAndOpenFile 失败的外层文案)。
+func TestFriendlyErr(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"Timeout.", "Timeout."},
+		{
+			"Failed to make the directory /data/x, cause: Permission denied",
+			"PUID=0",
+		},
+		{"Download aborted.", "PUID=0"},
+	}
+	for _, c := range cases {
+		got := friendlyErr(c.in)
+		if c.want == "" || c.want == c.in {
+			if got != c.in {
+				t.Fatalf("%q 不该被改写,得到 %q", c.in, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, c.want) {
+			t.Fatalf("%q 应当带上修复提示,得到 %q", c.in, got)
+		}
+		if !strings.HasPrefix(got, c.in) {
+			t.Fatalf("原始报错要保留在前面,得到 %q", got)
+		}
+	}
+}
+
+// 默认保存目录是网盘根目录:早期版本默认 "downloads",用户不想要
+func TestDefaultDirIsRoot(t *testing.T) {
+	if d := defaultSettings().DefaultDir; d != "" {
+		t.Fatalf("默认下载目录应当是根目录,得到 %q", d)
+	}
+}
+
+// 目标目录由 PocketDrive 预先建好(aria2 容器万一没权限,起码目录是在的),
+// 但 add 失败时不能在用户网盘里留下一个空文件夹。
+func TestEnsureDirOnlyOnSuccess(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	if _, err := m.Add("https://example.com/a.iso", "会建出来的"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(m.localDir, "会建出来的")); err != nil {
+		t.Fatalf("成功时应当把目录建出来: %v", err)
+	}
+
+	// 换成一个必然连不上的 aria2
+	m.c = NewClient("http://127.0.0.1:1/jsonrpc", "s3cret")
+	if _, err := m.Add("https://example.com/b.iso", "不该出现的"); err == nil {
+		t.Fatal("aria2 不可达时应当报错")
+	}
+	if _, err := os.Stat(filepath.Join(m.localDir, "不该出现的")); !os.IsNotExist(err) {
+		t.Fatal("add 失败不该在网盘里留下空文件夹")
 	}
 }

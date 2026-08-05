@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import KindIcon from '../components/KindIcon';
 import { fileKind, formatBytes, formatTime } from '../util';
+import { invalidateList } from '../lib/listcache';
 
 export default function Trash() {
     const [items, setItems] = useState<TrashItem[]>([]);
@@ -26,6 +27,8 @@ export default function Trash() {
     const run = async (fn: () => Promise<unknown>, msg?: string) => {
         try {
             await fn();
+            // 还原/永久删都改动了网盘,文件页的目录缓存作废
+            invalidateList();
             if (msg) toast.success(msg);
             load();
         } catch (e) {

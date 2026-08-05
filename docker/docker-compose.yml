@@ -51,8 +51,20 @@ services:
             - LISTEN_PORT=6888
             # 2G VPS 资源限制
             - MAX_CONCURRENT_DOWNLOADS=3
+            # 这两行不能删。镜像里 aria2c 固定以 p3terx 用户跑,PUID/PGID
+            # 不设时是 65534(nobody);而 PocketDrive 以 root 建目录
+            # (root:root 0755),nobody 写不进去 —— 表现为 BT 报
+            # "Failed to make the directory ..., cause: Permission denied",
+            # 普通直链报 "Download aborted."(aria2 建文件失败时的外层文案)。
+            # 两个容器统一用 root,共享 /data 才不会打架。
+            - PUID=0
+            - PGID=0
+            - UMASK_SET=022
         volumes:
             - ./data:/data
+            # aria2 自己的配置与会话。挂出来,容器重启/升级后未完成的任务
+            # 还能接着下,DHT 路由表也不用重新热身
+            - ./config/aria2:/config
         ports:
             - '6888:6888'
             - '6888:6888/udp'

@@ -67,10 +67,12 @@ func main() {
 	storageSvc := storage.New(cfg.DataDir, fileSvc.Root().FS())
 
 	aria2Mgr := aria2.NewManager(gdb,
-		aria2.NewClient(cfg.Aria2RPC, cfg.Aria2Secret), cfg.Aria2DataDir)
+		aria2.NewClient(cfg.Aria2RPC, cfg.Aria2Secret), cfg.Aria2DataDir, cfg.DataDir)
 	aria2Mgr.Start()
 
-	ytdlpMgr := ytdlp.NewManager(gdb, comps.Path(components.Ytdlp), cfg.DataDir)
+	// cookies 之类的凭据和 DB 放一起,不进网盘
+	ytdlpMgr := ytdlp.NewManager(gdb, comps.Path(components.Ytdlp), cfg.DataDir,
+		filepath.Dir(cfg.DBPath))
 	ytdlpMgr.Start()
 
 	// 缩略图缓存放 DB 同级目录,不会出现在网盘/WebDAV 里

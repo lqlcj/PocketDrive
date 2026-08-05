@@ -41,6 +41,8 @@ type Manager struct {
 	db      *gorm.DB
 	bin     string
 	dataDir string
+	// confDir 存 cookies 之类的私密配置(DB 同级,不在网盘里)
+	confDir string
 	queue   chan uint
 
 	mu      sync.Mutex
@@ -51,11 +53,12 @@ type Manager struct {
 	verChecked time.Time
 }
 
-func NewManager(gdb *gorm.DB, bin, dataDir string) *Manager {
+func NewManager(gdb *gorm.DB, bin, dataDir, confDir string) *Manager {
 	m := &Manager{
 		db:      gdb,
 		bin:     bin,
 		dataDir: dataDir,
+		confDir: confDir,
 		queue:   make(chan uint, 64),
 		cancels: make(map[uint]context.CancelFunc),
 	}
@@ -175,6 +178,39 @@ func presetArgs(preset string, opts Options) []string {
 	return args
 }
 
+// networkArgs 组装 cookies / 代理 / player client 三个设置项。
+func (m *Manager) networkArgs() []string {
+	s := m.Settings()
+	var args []string
+	if s.Proxy != "" {
+		args = append(args, "--proxy", s.Proxy)
+	}
+	if c := m.runCookies(); c != "" {
+		args = append(args, "--cookies", c)
+	}
+	if s.PlayerClient != "" && playerClients[s.PlayerClient] {
+		args = append(args, "--extractor-args", "youtube:player_client="+s.PlayerClient)
+	}
+	return args
+}
+
+// hintFor 在 yt-dlp 的报错后面补一句能照着做的话。yt-dlp 原文是英文
+// 且指向 wiki,对着网页用的人看不懂也不方便去翻。
+func hintFor(log string) string {
+	switch {
+	case strings.Contains(log, "not a bot") || strings.Contains(log, "Sign in to confirm"):
+		return "\n\n[PocketDrive] YouTube 把这台服务器的 IP 当成了机器人。" +
+			"到本页「高级设置」里传一份浏览器导出的 cookies.txt(或配个代理)再试。"
+	case strings.Contains(log, "Private video") || strings.Contains(log, "members-only"):
+		return "\n\n[PocketDrive] 这是私有/会员视频,需要在「高级设置」里配置对应账号的 cookies。"
+	case strings.Contains(log, "age") && strings.Contains(log, "confirm"):
+		return "\n\n[PocketDrive] 年龄限制视频,需要在「高级设置」里配置已登录账号的 cookies。"
+	case strings.Contains(log, "ffmpeg") && strings.Contains(log, "not installed"):
+		return "\n\n[PocketDrive] 缺 ffmpeg,音视频合并做不了。"
+	}
+	return ""
+}
+
 func (m *Manager) run(id uint) {
 	var t db.YtdlpTask
 	if err := m.db.First(&t, id).Error; err != nil {
@@ -204,6 +240,9 @@ func (m *Manager) run(id uint) {
 	var opts Options
 	_ = json.Unmarshal([]byte(t.Options), &opts)
 	args := []string{"--newline", "--no-warnings"}
+	// 反机器人相关的三样(cookies / 代理 / player client)全部来自设置,
+	// 值走白名单或格式校验,不存在把用户输入拼成别的参数的可能
+	args = append(args, m.networkArgs()...)
 	if opts.Playlist {
 		// 整个播放列表:存进「播放列表名」子文件夹,文件名带序号;
 		// 模板变量由 yt-dlp 按操作系统清洗,不会产生路径穿越
@@ -243,7 +282,7 @@ func (m *Manager) run(id uint) {
 	case ctx.Err() != nil:
 		m.finish(&t, "canceled", "")
 	case err != nil:
-		m.finish(&t, "error", lastLines(t.LogTail, 5))
+		m.finish(&t, "error", lastLines(t.LogTail, 5)+hintFor(t.LogTail))
 	default:
 		t.Progress = 100
 		m.finish(&t, "done", "")
