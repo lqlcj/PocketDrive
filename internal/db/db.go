@@ -22,8 +22,11 @@ type DownloadTask struct {
 	TotalLength     int64     `json:"totalLength"`
 	CompletedLength int64     `json:"completedLength"`
 	ErrorMsg        string    `json:"errorMsg"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"-"`
+	// 磁力链:元数据下载完成后 aria2 会 follow 出新 gid,新记录记下旧 gid,
+	// 前端拿着旧 gid 也能解析到当前任务
+	Follows   string    `json:"-"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 type Share struct {

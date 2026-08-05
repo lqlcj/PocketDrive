@@ -126,10 +126,18 @@ func (m *Manager) deleteFiles(paths []string, taskDir string) int {
 
 // RemoveTask 删除任务记录,withFiles 为真时连已下载的文件一起删。
 func (m *Manager) RemoveTask(gid string, withFiles bool) (int, error) {
+	// 磁力链可能拿着元数据 gid,先解析到当前真实 gid 再动手
+	cur := m.resolveGID(gid)
 	var t db.DownloadTask
-	if err := m.db.First(&t, "gid = ?", gid).Error; err != nil {
-		return 0, errors.New("任务不存在")
+	if err := m.db.Where("gid = ? OR follows = ?", cur, gid).First(&t).Error; err != nil {
+		// resolveGID 只靠 aria2 翻到了新 gid、库里还没迁移(元数据刚
+		// follow 完):退回用传入的 gid 找旧记录
+		if err := m.db.First(&t, "gid = ?", gid).Error; err != nil {
+			return 0, errors.New("任务不存在")
+		}
 	}
+	dbGID := t.GID
+	t.GID = cur
 
 	// 文件清单必须在 aria2 忘掉这个任务之前拿
 	var paths []string
@@ -138,10 +146,10 @@ func (m *Manager) RemoveTask(gid string, withFiles bool) (int, error) {
 	}
 
 	if !isTerminal(t.Status) {
-		_ = m.c.Remove(gid) // 忽略错误:aria2 里可能已不存在
+		_ = m.c.Remove(cur) // 忽略错误:aria2 里可能已不存在
 	}
-	_ = m.c.RemoveDownloadResult(gid)
-	m.db.Delete(&db.DownloadTask{}, "gid = ?", gid)
+	_ = m.c.RemoveDownloadResult(cur)
+	m.db.Delete(&db.DownloadTask{}, "gid = ?", dbGID)
 
 	if !withFiles {
 		return 0, nil

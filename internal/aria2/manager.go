@@ -147,6 +147,7 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 		nt := db.DownloadTask{
 			GID: newGID, URL: t.URL, Dir: t.Dir,
 			Status: "active", CreatedAt: t.CreatedAt,
+			Follows: t.GID,
 		}
 		m.db.Save(&nt)
 		m.syncOne(&nt)
@@ -341,11 +342,28 @@ type TorrentFile struct {
 	Length int64  `json:"length"`
 }
 
+// resolveGID 把前端传进来的 gid(磁力链拿到的通常是元数据 gid)解析成
+// aria2 当前真实下载的 gid。磁力元数据就绪后 aria2 会 follow 出新 gid,
+// 旧 gid 只留一条 [METADATA] 伪文件——拿旧 gid 永远等不出文件清单。
+// 先查库里迁移记录(follows),再用 aria2 的 followedBy 兜底。
+func (m *Manager) resolveGID(gid string) string {
+	var t db.DownloadTask
+	if err := m.db.Where("gid = ? OR follows = ?", gid, gid).First(&t).Error; err == nil && t.GID != gid {
+		return t.GID
+	}
+	st, err := m.c.TellStatus(gid)
+	if err == nil && len(st.FollowedBy) > 0 {
+		return st.FollowedBy[0]
+	}
+	return gid
+}
+
 // TorrentFiles 返回 BT 任务的种子名与文件清单。磁力链在元数据下载完成
 // 之前只有一条 [METADATA] 伪文件(前端据此判断「还不能选」);.torrent
 // 添加后立刻就有完整清单。
 func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
-	st, err := m.c.TellStatus(gid)
+	cur := m.resolveGID(gid)
+	st, err := m.c.TellStatus(cur)
 	if err != nil {
 		return "", nil, err
 	}
@@ -364,19 +382,20 @@ func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
 // 1-based 序号;不传则下载全部。调用时任务应在 paused 状态——种子添加
 // 时就挂起,磁力则由前端在元数据就绪后先暂停再让用户勾选。
 func (m *Manager) SelectFiles(gid string, files []int) error {
+	cur := m.resolveGID(gid)
 	if len(files) > 0 {
 		parts := make([]string, len(files))
 		for i, f := range files {
 			parts[i] = strconv.Itoa(f)
 		}
-		if err := m.c.ChangeOption(gid, map[string]string{"select-file": strings.Join(parts, ",")}); err != nil {
+		if err := m.c.ChangeOption(cur, map[string]string{"select-file": strings.Join(parts, ",")}); err != nil {
 			return err
 		}
 	}
-	if err := m.c.Unpause(gid); err != nil {
+	if err := m.c.Unpause(cur); err != nil {
 		return err
 	}
-	m.db.Model(&db.DownloadTask{}).Where("gid = ?", gid).Update("status", "active")
+	m.db.Model(&db.DownloadTask{}).Where("gid = ? OR follows = ?", cur, gid).Update("status", "active")
 	return nil
 }
 
@@ -512,11 +531,12 @@ func (m *Manager) HandlePause(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := m.c.Pause(gid); err != nil {
+	cur := m.resolveGID(gid)
+	if err := m.c.Pause(cur); err != nil {
 		httpx.Err(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	m.db.Model(&db.DownloadTask{}).Where("gid = ?", gid).Update("status", "paused")
+	m.db.Model(&db.DownloadTask{}).Where("gid = ? OR follows = ?", cur, gid).Update("status", "paused")
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -525,11 +545,12 @@ func (m *Manager) HandleUnpause(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := m.c.Unpause(gid); err != nil {
+	cur := m.resolveGID(gid)
+	if err := m.c.Unpause(cur); err != nil {
 		httpx.Err(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	m.db.Model(&db.DownloadTask{}).Where("gid = ?", gid).Update("status", "active")
+	m.db.Model(&db.DownloadTask{}).Where("gid = ? OR follows = ?", cur, gid).Update("status", "active")
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

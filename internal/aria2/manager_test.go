@@ -282,6 +282,71 @@ func TestMagnetFollowedByMigration(t *testing.T) {
 	if tasks[0].Dir != "bt" {
 		t.Fatalf("dir lost in migration: %q", tasks[0].Dir)
 	}
+	if tasks[0].Follows != metaGID {
+		t.Fatalf("migrated task 应当记下旧 gid(follows),得到 %q", tasks[0].Follows)
+	}
+}
+
+// 磁力元数据就绪后,前端仍拿着旧 gid 轮询文件清单:resolveGID 必须把它
+// 翻到 followedBy 的真实 gid,否则永远只看到 [METADATA] 伪文件、弹框
+// 一直转圈(「上传的种子能加载」正是因为它没有 follow 这一步)。
+func TestMagnetTorrentFilesViaOldGID(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	task, err := m.Add("magnet:?xt=urn:btih:abcdef", "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+
+	mock.statuses["realgid"] = &Status{
+		GID: "realgid", Status: "active",
+		Bittorrent: &struct {
+			Info *struct {
+				Name string `json:"name"`
+			} `json:"info"`
+		}{Info: &struct {
+			Name string `json:"name"`
+		}{Name: "ubuntu.iso"}},
+		Files: []File{{Path: "/data/bt/ubuntu.iso/iso.mkv", Length: "100"}},
+	}
+	mock.statuses[metaGID] = &Status{
+		GID: metaGID, Status: "complete", FollowedBy: []string{"realgid"},
+		Files: []File{{Path: "/data/bt/[METADATA]magnet:?xt=urn:btih:abcdef", Length: "0"}},
+	}
+
+	// aria2 已 follow、DB 还没迁移时,拿旧 gid 要能拉到真实文件
+	name, files, err := m.TorrentFiles(metaGID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "ubuntu.iso" {
+		t.Fatalf("name = %q, want ubuntu.iso", name)
+	}
+	if len(files) != 1 || files[0].Path != "/data/bt/ubuntu.iso/iso.mkv" {
+		t.Fatalf("files = %+v, want realgid 的真实文件", files)
+	}
+
+	// 迁移完成后(库里旧记录已被删),拿旧 gid 仍能解析
+	m.sync()
+	name, files, err = m.TorrentFiles(metaGID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "/data/bt/ubuntu.iso/iso.mkv" {
+		t.Fatalf("迁移后仍应解析到真实文件,得到 %+v", files)
+	}
+
+	// 勾选下发也要落到真实 gid 上
+	if err := m.SelectFiles(metaGID, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastSelect != "1" {
+		t.Fatalf("select-file 应当下发给真实 gid,得到 %q", mock.lastSelect)
+	}
+	if len(mock.unpaused) != 1 || mock.unpaused[0] != "realgid" {
+		t.Fatalf("应当 unpause realgid,得到 %v", mock.unpaused)
+	}
 }
 
 func TestGIDLostAfterAria2Restart(t *testing.T) {
