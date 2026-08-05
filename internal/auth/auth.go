@@ -40,6 +40,7 @@ type Service struct {
 	webdavUser    string
 	webdavHash    string
 	secret        []byte
+	tokenVersion  int64
 	// configDir 存放自定义头像。刻意放在网盘目录之外:否则头像会出现
 	// 在文件列表和 WebDAV 里,还会被整盘备份带走
 	configDir string
@@ -115,6 +116,12 @@ func New(gdb *gorm.DB, user, initialPass, configDir string) (*Service, error) {
 		s.user = storedUser
 	}
 	s.webdavEnabled = s.getSettingOr("webdav_enabled", "true") != "false"
+	if _, err := fmt.Sscanf(s.getSettingOr("token_version", "1"), "%d", &s.tokenVersion); err != nil || s.tokenVersion < 1 {
+		s.tokenVersion = 1
+	}
+	if err := s.setSetting("token_version", fmt.Sprintf("%d", s.tokenVersion)); err != nil {
+		return nil, err
+	}
 	s.webdavUser = s.getSettingOr("webdav_user", s.user)
 	s.webdavHash = s.getSettingOr("webdav_hash", "")
 	return s, nil
@@ -266,20 +273,33 @@ func (s *Service) ChangePassword(oldPass, newPass string) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	nextVersion := s.tokenVersion + 1
+	s.mu.Unlock()
+	// Persist invalidation first. If the password write fails, existing
+	// sessions are still revoked rather than becoming valid again after restart.
+	if err := s.setSetting("token_version", fmt.Sprintf("%d", nextVersion)); err != nil {
+		return err
+	}
 	if err := s.setSetting("admin_hash", string(hb)); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	s.passCache = make(map[[32]byte]struct{})
+	s.tokenVersion = nextVersion
 	s.mu.Unlock()
 	return nil
 }
 
 func (s *Service) issueToken() (string, time.Time, error) {
 	exp := time.Now().Add(tokenTTL)
+	s.mu.Lock()
+	version := s.tokenVersion
+	s.mu.Unlock()
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": s.User(),
 		"exp": exp.Unix(),
+		"ver": version,
 	})
 	str, err := t.SignedString(s.secret)
 	return str, exp, err
@@ -292,7 +312,18 @@ func (s *Service) verifyToken(tok string) bool {
 		}
 		return s.secret, nil
 	})
-	return err == nil && t.Valid
+	if err != nil || !t.Valid {
+		return false
+	}
+	claims, ok := t.Claims.(jwt.MapClaims)
+	if !ok || claims["sub"] != s.User() {
+		return false
+	}
+	ver, ok := claims["ver"].(float64)
+	s.mu.Lock()
+	currentVersion := s.tokenVersion
+	s.mu.Unlock()
+	return ok && int64(ver) == currentVersion
 }
 
 // ---- rate limiting ----
@@ -442,7 +473,7 @@ func (s *Service) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "token": tok, "user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
 }
 
 func (s *Service) HandleLogout(w http.ResponseWriter, r *http.Request) {

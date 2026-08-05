@@ -87,9 +87,6 @@ services:
             - '6888:6888'
             - '6888:6888/udp'
 
-networks:
-    update-internal:
-        internal: true
 EOF
 
 say "拉取镜像并启动…"

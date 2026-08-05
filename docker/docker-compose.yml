@@ -29,7 +29,7 @@ services:
             # 留空则首次启动随机生成并打印在容器日志里
             - POCKETDRIVE_ADMIN_PASSWORD=${POCKETDRIVE_ADMIN_PASSWORD:-}
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
-            - POCKETDRIVE_ARIA2_SECRET=${ARIA2_SECRET:-changeme}
+            - POCKETDRIVE_ARIA2_SECRET=${ARIA2_SECRET:?请设置随机的 ARIA2_SECRET}
             # aria2 进程眼里的数据目录。两个容器必须挂成同一个路径,
             # 否则下载完的文件在网盘里找不到
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
@@ -43,7 +43,7 @@ services:
         container_name: pocketdrive-aria2
         restart: unless-stopped
         environment:
-            - RPC_SECRET=${ARIA2_SECRET:-changeme}
+            - RPC_SECRET=${ARIA2_SECRET:?请设置随机的 ARIA2_SECRET}
             # BT 监听端口(需要在防火墙放行 TCP+UDP,不开也能下载只是慢)
             - LISTEN_PORT=6888
             # 2G VPS 资源限制

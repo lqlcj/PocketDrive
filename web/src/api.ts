@@ -384,8 +384,9 @@ export const api = {
     deleteShare: (id: number) => post<{ ok: boolean }>('/api/v1/shares/delete', { id }),
 
     shareInfo: (token: string) => req<ShareInfo>(`/api/v1/public/share/${token}`),
-    shareDownloadUrl: (token: string, password: string, dl = false) =>
-        `/api/v1/public/share/${token}/download?password=${encodeURIComponent(password)}${dl ? '&dl=1' : ''}`,
-    shareThumbUrl: (token: string, password: string) =>
-        `/api/v1/public/share/${token}/thumb?password=${encodeURIComponent(password)}`,
+    shareUnlock: (token: string, password: string) =>
+        post<{ ok: boolean }>(`/api/v1/public/share/${token}/unlock`, { password }),
+    shareDownloadUrl: (token: string, dl = false) =>
+        `/api/v1/public/share/${token}/download${dl ? '?dl=1' : ''}`,
+    shareThumbUrl: (token: string) => `/api/v1/public/share/${token}/thumb`,
 };

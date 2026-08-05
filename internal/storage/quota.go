@@ -155,6 +155,26 @@ func (s *Service) AddUsage(delta int64) {
 	}
 }
 
+// UploadLimit returns the remaining configured local quota plus a small
+// multipart framing allowance. Unknown usage deliberately returns zero so a
+// background refresh cannot reject an otherwise valid upload.
+func (s *Service) UploadLimit() int64 {
+	q := s.Quota()
+	if q <= 0 {
+		return 0
+	}
+	s.uMu.Lock()
+	defer s.uMu.Unlock()
+	if s.usageAt.IsZero() {
+		return 0
+	}
+	remaining := q - s.usageBytes
+	if remaining <= 0 {
+		return 1
+	}
+	return remaining
+}
+
 // FullError 是「装不下了」的统一错误,带一句能照着做的话。
 type FullError struct{ msg string }
 

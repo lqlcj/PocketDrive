@@ -38,6 +38,9 @@ type LocalSpace interface {
 	CheckLocal(size int64) error
 	// AddUsage 写完就地累加,免得等下一轮全量统计
 	AddUsage(delta int64)
+	// UploadLimit returns the maximum request body size allowed for a local upload.
+	// Zero means no configured quota.
+	UploadLimit() int64
 }
 
 // SetLocalSpace 在 storage 构造好之后回填。没设时所有检查都放行。
@@ -266,6 +269,16 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, "需要 multipart 上传")
 		return
+	}
+	if mnt == nil && s.space != nil {
+		if limit := s.space.UploadLimit(); limit > 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, limit+1<<20)
+			mr, err = r.MultipartReader()
+			if err != nil {
+				httpx.Err(w, http.StatusBadRequest, "需要 multipart 上传")
+				return
+			}
+		}
 	}
 	var saved []string
 	for {

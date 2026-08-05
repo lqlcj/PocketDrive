@@ -31,6 +31,12 @@ type Service struct {
 
 	mu      sync.Mutex
 	limiter map[string]*ipEntry
+	grants  map[string]grant
+}
+
+type grant struct {
+	token   string
+	expires time.Time
 }
 
 type ipEntry struct {
@@ -39,7 +45,7 @@ type ipEntry struct {
 }
 
 func New(gdb *gorm.DB, fs *files.Service, th *thumbs.Service, cs *cloud.Service) *Service {
-	return &Service{db: gdb, files: fs, thumbs: th, cloud: cs, limiter: make(map[string]*ipEntry)}
+	return &Service{db: gdb, files: fs, thumbs: th, cloud: cs, limiter: make(map[string]*ipEntry), grants: make(map[string]grant)}
 }
 
 func randToken(n int) string {
@@ -181,6 +187,29 @@ func (s *Service) checkPassword(sh *db.Share, password, ip string) error {
 	return nil
 }
 
+func grantCookie(token string) string { return "pocketdrive_share_" + token }
+
+func (s *Service) authorized(r *http.Request, sh *db.Share) error {
+	if !sh.HasPassword {
+		return nil
+	}
+	c, err := r.Cookie(grantCookie(sh.Token))
+	if err != nil || c.Value == "" {
+		return errors.New("需要提取密码")
+	}
+	s.mu.Lock()
+	g, ok := s.grants[c.Value]
+	if ok && time.Now().After(g.expires) {
+		delete(s.grants, c.Value)
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok || g.token != sh.Token {
+		return errors.New("需要重新输入提取密码")
+	}
+	return nil
+}
+
 // ---- authenticated handlers ----
 
 func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +235,34 @@ func (s *Service) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "share": sh})
+}
+
+// HandleUnlock validates a share password without putting it in a URL.
+func (s *Service) HandleUnlock(w http.ResponseWriter, r *http.Request) {
+	sh, err := s.find(r.PathValue("token"))
+	if err != nil {
+		httpx.Err(w, http.StatusNotFound, err.Error())
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if err := s.checkPassword(sh, req.Password, httpx.ClientIP(r)); err != nil {
+		httpx.Err(w, http.StatusForbidden, err.Error())
+		return
+	}
+	grantToken := randToken(32)
+	s.mu.Lock()
+	s.grants[grantToken] = grant{token: sh.Token, expires: time.Now().Add(15 * time.Minute)}
+	s.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{Name: grantCookie(sh.Token), Value: grantToken,
+		Path: "/api/v1/public/share/" + sh.Token, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: 15 * 60})
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Service) HandleDelete(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +319,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if err := s.checkPassword(sh, r.URL.Query().Get("password"), httpx.ClientIP(r)); err != nil {
+	if err := s.authorized(r, sh); err != nil {
 		httpx.Err(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -305,7 +362,7 @@ func (s *Service) HandleThumb(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if err := s.checkPassword(sh, r.URL.Query().Get("password"), httpx.ClientIP(r)); err != nil {
+	if err := s.authorized(r, sh); err != nil {
 		httpx.Err(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -355,6 +412,8 @@ func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 	// 用真实文件名(即使拿到的是不带文件名段的旧格式链接)
 	w.Header().Set("Content-Disposition",
 		"inline; filename*=UTF-8''"+url.PathEscape(fi.Name()))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 

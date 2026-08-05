@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"time"
 
 	"pocketdrive/internal/archive"
 	"pocketdrive/internal/aria2"
@@ -46,6 +47,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 
 	// 公开分享(免登录)
 	mux.HandleFunc("GET /api/v1/public/share/{token}", d.Share.HandleInfo)
+	mux.HandleFunc("POST /api/v1/public/share/{token}/unlock", d.Share.HandleUnlock)
 	mux.HandleFunc("GET /api/v1/public/share/{token}/download", d.Share.HandleDownload)
 	mux.HandleFunc("GET /api/v1/public/share/{token}/thumb", d.Share.HandleThumb)
 	// 直链两种形式等价:带文件名段的 URL 自带真实后缀,播放器/下载工具按后缀识别
@@ -160,8 +162,22 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	mux.Handle("/", web.Handler())
 
 	return &http.Server{
-		Addr: cfg.Addr,
+		Addr:              cfg.Addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Minute,
+		WriteTimeout:      15 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 		// observe 在最外层:CSRF 自己也可能 panic 或返回 5xx
-		Handler: observe(auth.CSRF(mux)),
+		Handler: securityHeaders(observe(auth.CSRF(mux))),
 	}
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
 }

@@ -1,24 +1,39 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { api } from './api';
 import type { Profile } from './api';
 import Layout from './components/Layout';
-import Login from './pages/Login';
-import Files from './pages/Files';
-import NoteEditor from './pages/NoteEditor';
-import Downloads from './pages/Downloads';
-import DownloadSettings from './pages/DownloadSettings';
-import SharesPage from './pages/SharesPage';
-import Trash from './pages/Trash';
-import Settings from './pages/Settings';
-import StoragePage from './pages/StoragePage';
-import StorageSettings from './pages/StorageSettings';
-import SharePage from './pages/SharePage';
 import UploadPanel from './components/UploadPanel';
 import MusicPlayer from './components/MusicPlayer';
 import { UploadProvider } from './upload/store';
 import { PlayerProvider } from './player/store';
+
+const Login = lazy(() => import('./pages/Login'));
+const Files = lazy(() => import('./pages/Files'));
+const NoteEditor = lazy(() => import('./pages/NoteEditor'));
+const Downloads = lazy(() => import('./pages/Downloads'));
+const DownloadSettings = lazy(() => import('./pages/DownloadSettings'));
+const SharesPage = lazy(() => import('./pages/SharesPage'));
+const Trash = lazy(() => import('./pages/Trash'));
+const Settings = lazy(() => import('./pages/Settings'));
+const StoragePage = lazy(() => import('./pages/StoragePage'));
+const StorageSettings = lazy(() => import('./pages/StorageSettings'));
+const SharePage = lazy(() => import('./pages/SharePage'));
+
+function SuspenseWrap({ children }: { children: React.ReactNode }) {
+    return (
+        <Suspense
+            fallback={
+                <div className="min-h-screen flex items-center justify-center gap-2 text-ink-soft">
+                    <Loader2 className="size-5 animate-spin" /> 加载中…
+                </div>
+            }
+        >
+            {children}
+        </Suspense>
+    );
+}
 
 function Private({
     profile,
@@ -44,22 +59,21 @@ function Private({
             <PlayerProvider>
                 <Routes>
                     <Route element={<Layout profile={profile} onLogout={onLogout} />}>
-                        {/* 我的文件即主页 */}
                         <Route path="/" element={<Navigate to="/files" replace />} />
-                        <Route path="/files/*" element={<Files />} />
-                        <Route path="/note/*" element={<NoteEditor />} />
-                        <Route path="/downloads" element={<Downloads />} />
-                        <Route path="/downloads/settings" element={<DownloadSettings />} />
-                        <Route path="/shares" element={<SharesPage />} />
-                        <Route path="/trash" element={<Trash />} />
-                        <Route path="/storage" element={<StoragePage />} />
+                        <Route path="/files/*" element={<SuspenseWrap><Files /></SuspenseWrap>} />
+                        <Route path="/note/*" element={<SuspenseWrap><NoteEditor /></SuspenseWrap>} />
+                        <Route path="/downloads" element={<SuspenseWrap><Downloads /></SuspenseWrap>} />
+                        <Route path="/downloads/settings" element={<SuspenseWrap><DownloadSettings /></SuspenseWrap>} />
+                        <Route path="/shares" element={<SuspenseWrap><SharesPage /></SuspenseWrap>} />
+                        <Route path="/trash" element={<SuspenseWrap><Trash /></SuspenseWrap>} />
+                        <Route path="/storage" element={<SuspenseWrap><StoragePage /></SuspenseWrap>} />
                         <Route
                             path="/storage-settings"
-                            element={<StorageSettings profile={profile} />}
+                            element={<SuspenseWrap><StorageSettings profile={profile} /></SuspenseWrap>}
                         />
                         <Route
                             path="/settings"
-                            element={<Settings profile={profile} onProfile={onProfile} />}
+                            element={<SuspenseWrap><Settings profile={profile} onProfile={onProfile} /></SuspenseWrap>}
                         />
                         <Route path="*" element={<Navigate to="/files" replace />} />
                     </Route>
@@ -99,7 +113,7 @@ export default function App() {
         <BrowserRouter>
             <Routes>
                 {/* 公开分享页:免登录 */}
-                <Route path="/s/:token" element={<SharePage />} />
+                <Route path="/s/:token" element={<SuspenseWrap><SharePage /></SuspenseWrap>} />
                 <Route
                     path="*"
                     element={

@@ -29,15 +29,8 @@ export default function SharePage() {
 
     const unlock = async () => {
         try {
-            const resp = await fetch(api.shareDownloadUrl(token, password), {
-                headers: { Range: 'bytes=0-0' },
-            });
-            if (resp.ok || resp.status === 206) {
-                setUnlocked(true);
-            } else {
-                const body = await resp.json().catch(() => null);
-                toast.error(body?.error ?? '提取密码不正确');
-            }
+            await api.shareUnlock(token, password);
+            setUnlocked(true);
         } catch {
             toast.error('网络错误');
         }
@@ -62,8 +55,8 @@ export default function SharePage() {
     }
 
     const kind = fileKind(info.name);
-    const url = api.shareDownloadUrl(token, password);
-    const thumb = api.shareThumbUrl(token, password);
+    const url = api.shareDownloadUrl(token);
+    const thumb = api.shareThumbUrl(token);
 
     return (
         <div className="min-h-screen flex items-center justify-center px-4 py-8">
@@ -137,7 +130,7 @@ export default function SharePage() {
                                 </button>
                             ))}
                         <a
-                            href={api.shareDownloadUrl(token, password, true)}
+                            href={api.shareDownloadUrl(token, true)}
                             download
                             className="block mt-4"
                         >
