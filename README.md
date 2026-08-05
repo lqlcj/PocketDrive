@@ -1,5 +1,7 @@
 # PocketDrive — 口袋网盘
 
+<img width="1983" height="793" alt="hengfu" src="https://github.com/user-attachments/assets/84fd00e9-185f-47ae-a4d6-99fec2c3c124" />
+
 自托管个人网盘,专为小内存 VPS(1-2G)设计。前端 React 19 + Tailwind CSS v4 +
 shadcn 式自研组件 + lucide 图标,后端 Go 单二进制,SQLite 存储元数据。
 
