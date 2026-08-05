@@ -15,10 +15,10 @@
 也不打算做多用户和多客户端，一切目标都是轻量，让小鸡也能用，不能让它只配装探针。响应式已做好，移动端添加到桌面用 PWA 体验也很好。
 
 ---
-日间模式:
-<img width="1550" height="882" alt="日间模式1-min" src="https://github.com/user-attachments/assets/98fa6c2e-d215-49c2-aa0c-cc50bff203cb" />
 夜间模式:
 <img width="1537" height="882" alt="黑夜模式-min" src="https://github.com/user-attachments/assets/9f324de5-9403-4683-9467-741b39388e04" />
+日间模式:
+<img width="1550" height="882" alt="日间模式1-min" src="https://github.com/user-attachments/assets/98fa6c2e-d215-49c2-aa0c-cc50bff203cb" />
 
 ## 资源占用情况
 
@@ -27,10 +27,9 @@
 | PocketDrive(Go,含前端) | ~40-80MB |
 | aria2 | ~30-100MB |
 
-上传下载全程流式,视频/音频播放走 HTTP Range,不占内存;Office/PDF 预览在浏览器端渲染,
+上传下载全程流式,视频/音频播放走浏览器,不占内存;Office/PDF 预览在浏览器端渲染,
 服务器零额外开销。
-**视频只直连播放浏览器支持的格式**(mp4/webm 等);mkv/rmvb 等请下载后本地播放
-(小内存装不下实时转码,这是刻意取舍)。
+**视频只直连播放浏览器支持的格式**(mp4/webm 等);mkv/rmvb 在线预览不支持因为小内存装不下实时转码,这是刻意取舍。
 
 ## 功能
 
