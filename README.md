@@ -27,6 +27,9 @@
 | PocketDrive(Go,含前端) | ~40-80MB |
 | aria2 | ~30-100MB |
 
+两个进程常驻内存还没100M,RN,CC的小鸡再也不用吃灰了,线路鸡也可以利用起来了.
+<img width="917" height="330" alt="内存-min" src="https://github.com/user-attachments/assets/ad41ac05-d3ad-4856-a115-ec60fbe8116c" />
+
 上传下载全程流式,视频/音频播放走浏览器,不占内存;Office/PDF 预览在浏览器端渲染,
 服务器零额外开销。
 **视频只直连播放浏览器支持的格式**(mp4/webm 等);mkv/rmvb 在线预览不支持因为小内存装不下实时转码,这是刻意取舍。
