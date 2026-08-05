@@ -82,13 +82,13 @@ services:
         environment:
             - POCKETDRIVE_DATA_DIR=/data
             - POCKETDRIVE_DB=/config/pocketdrive.db
-            - POCKETDRIVE_ADMIN_USER=admin
+            - POCKETDRIVE_ADMIN_USER=改成你的用户名
             - POCKETDRIVE_ADMIN_PASSWORD=改成你的登录密码
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
-            - POCKETDRIVE_ARIA2_SECRET=改成你的rpc密钥
+            - POCKETDRIVE_ARIA2_SECRET=c7677560f005ee860ec90dee5f6ed25ff525c7ccc3030ab95b8e74d843af6f7d
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
             - POCKETDRIVE_UPDATER_URL=http://pocketdrive-updater:8080
-            - POCKETDRIVE_UPDATER_TOKEN=改成随机长密钥
+            - POCKETDRIVE_UPDATER_TOKEN=53fb76ebe37b3267c02f2e58777f03b89a4e097d234e5b727e894187351101cc8ff80df00eb57d9f898344c8b2195433
         volumes:
             - ./data:/data
             - ./config:/config
@@ -107,8 +107,10 @@ services:
         restart: unless-stopped
         command: --http-api-update --http-api-periodic-polls=false --label-enable --cleanup
         environment:
-            - WATCHTOWER_HTTP_API_TOKEN=改成随机长密钥
+            - WATCHTOWER_HTTP_API_TOKEN=53fb76ebe37b3267c02f2e58777f03b89a4e097d234e5b727e894187351101cc8ff80df00eb57d9f898344c8b2195433
             - WATCHTOWER_HTTP_API_METRICS=false
+            # 兼容新版 Docker daemon(最低接受 API 1.40)
+            - DOCKER_API_VERSION=1.40
         volumes:
             - /var/run/docker.sock:/var/run/docker.sock:ro
         read_only: true
@@ -122,7 +124,7 @@ services:
         container_name: pocketdrive-aria2
         restart: unless-stopped
         environment:
-            - RPC_SECRET=改成你的rpc密钥
+            - RPC_SECRET=c7677560f005ee860ec90dee5f6ed25ff525c7ccc3030ab95b8e74d843af6f7d
             # BT 监听端口(可选,不开也能下载)
             - LISTEN_PORT=6888
             - MAX_CONCURRENT_DOWNLOADS=3
@@ -145,7 +147,7 @@ networks:
         internal: true
 ```
 
-3. 改掉登录密码、RPC 密钥和更新器随机长密钥(**两个 `rpc密钥` 必须填成同一个值;更新器 Token 的两处也必须一致**)→ **确认**。
+3. 只需改掉编排里的管理员用户名和登录密码,其余内部密钥已经填好 → **确认**。
    之后在 1Panel 的防火墙页放行 `16688`(以及可选的 `6888`)。
 4. 进入 PocketDrive → 设置,输入当前密码后点击「检查并升级」即可。若更新器未配置,仍可在编排详情页「拉取镜像并重建」,数据在编排目录的 `data/` 里。
    yt-dlp 不随镜像走,在网页设置页里单独升级。
