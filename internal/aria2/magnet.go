@@ -3,12 +3,12 @@ package aria2
 // 磁力链接 → .torrent 种子:解决 aria2 容器拉不到元数据(磁力没人做种、
 // DHT/BT 端口被防火墙挡)时,种子文件上传却一直好用的落差。
 //
-// 思路:添加磁力时照旧把磁力交给 aria2 挂着拉元数据(这样前端拿到的
-// gid 是真实的,轮询 [METADATA] 伪文件的逻辑不用动),同时 PocketDrive
-// 自己用 anacrolix/torrent 走 DHT + 注入的全套 tracker 去取元数据。
+// 思路:添加磁力时把磁力交给 aria2 但**挂起**(不挂起的话 aria2 自己
+// 拉到元数据后会立刻 follow 成真实下载、未经勾选就写盘),元数据由
+// PocketDrive 自己用 anacrolix/torrent 走 DHT + 注入的全套 tracker 去取。
 // 取到之后转成 .torrent,走 AddTorrent 这条「上传种子」的熟路,并把
 // 库里记录迁到新 gid(follows=旧gid,前端拿旧 gid 轮询也能解析到)。
-// 转换失败就什么都不做,原磁力任务还留在 aria2 里,行为同改造前。
+// 转换失败就保持挂起,前端会提示换 .torrent 上传;不会偷下载任何数据。
 
 import (
 	"context"
@@ -32,6 +32,18 @@ import (
 // 120 秒,这里必须留在这个值之内,转换成功才能赶在弹框转「失败」之前
 // 把文件清单交出来。
 const magnetConvertTimeout = 110 * time.Second
+
+// magnetRetryGap 一次转换失败后至少隔这么久才允许再次尝试,免得前端
+// 每秒轮询一次,失败就一直轰 DHT。
+const magnetRetryGap = 5 * time.Second
+
+// magnetJob 记录一个磁力链接的转换状态,按 gid 存在 Manager.magnetJobs 里。
+// running 防重入(同一磁力只转一次);lastErrAt 用于失败后的退避重试。
+type magnetJob struct {
+	gid       string
+	running   bool
+	lastErrAt time.Time
+}
 
 // magnetHash 从磁力链接里抠出 40 位 hex 的 btih 信息哈希。
 func magnetHash(magnet string) (string, error) {
@@ -73,16 +85,66 @@ func withTrackers(magnet, trackers string) string {
 }
 
 // startMagnetConvert 后台取磁力元数据 → 转 .torrent → 走 AddTorrent。
-// 转换是尽力而为:失败只记日志,不干扰 aria2 里挂着的原磁力任务。
+// 同一 gid 只允许一个转换在跑;失败后留记录,等前端「重试」再拉起。
 func (m *Manager) startMagnetConvert(oldGID, magnet, relDir, hash string) {
+	m.magnetMu.Lock()
+	j := m.magnetJobs[oldGID]
+	if j == nil {
+		j = &magnetJob{gid: oldGID}
+		m.magnetJobs[oldGID] = j
+	}
+	if j.running {
+		m.magnetMu.Unlock()
+		return // 已有转换在跑,别重复
+	}
+	if !j.lastErrAt.IsZero() && time.Since(j.lastErrAt) < magnetRetryGap {
+		m.magnetMu.Unlock()
+		return // 刚失败过,退避一下
+	}
+	j.running = true
+	m.magnetMu.Unlock()
+
 	go func() {
 		torrentB64, name, err := fetchTorrentMeta(withTrackers(magnet, m.trackers()))
+		m.magnetMu.Lock()
 		if err != nil {
+			j.running = false
+			j.lastErrAt = time.Now()
+			m.magnetMu.Unlock()
 			logs.Errorf("aria2", "磁力转种子失败(%s…): %v", hash[:8], err)
 			return
 		}
-		m.finishMagnet(oldGID, magnet, relDir, torrentB64, name)
+		// 成功:跑完 finishMagnet(迁移记录)后再摘掉 job
+		m.magnetMu.Unlock()
+		ok := m.finishMagnet(oldGID, magnet, relDir, torrentB64, name)
+		m.magnetMu.Lock()
+		if ok {
+			delete(m.magnetJobs, oldGID)
+		} else {
+			// AddTorrent 被 aria2 拒了:标记可重试,别让 job 卡在 running
+			j.running = false
+			j.lastErrAt = time.Now()
+		}
+		m.magnetMu.Unlock()
 	}()
+}
+
+// ensureMagnetConvert 保证某个磁力任务有转换在跑。首次由 Add 拉起;
+// 转换失败后,前端「重试」重新轮询文件清单时会走到这里,把转换重新拉起。
+func (m *Manager) ensureMagnetConvert(gid string) {
+	var t db.DownloadTask
+	if err := m.db.First(&t, "gid = ?", gid).Error; err != nil {
+		return
+	}
+	// 已经迁成种子任务(follows 非空)、或非磁力、或已是终态:不用转
+	if t.Follows != "" || !strings.HasPrefix(t.URL, "magnet:") || isTerminal(t.Status) {
+		return
+	}
+	hash, err := magnetHash(t.URL)
+	if err != nil {
+		return
+	}
+	m.startMagnetConvert(gid, t.URL, t.Dir, hash)
 }
 
 // fetchTorrentMeta 用 anacrolix 的 BT 客户端取磁力元数据,返回可直接喂给
@@ -133,16 +195,17 @@ func fetchTorrentMeta(magnet string) (string, string, error) {
 // finishMagnet 在磁力元数据取到之后,把 aria2 里的磁力任务换成
 // .torrent 任务,并迁移库里记录。调用方(转换 goroutine)与 syncOne
 // 可能并发迁移同一任务,用 migMu 串行化,进去后先确认旧记录还在。
-func (m *Manager) finishMagnet(oldGID, magnet, relDir, torrentB64, name string) {
+// 返回 false 表示 .torrent 没加进 aria2(调用方应让任务可重试)。
+func (m *Manager) finishMagnet(oldGID, magnet, relDir, torrentB64, name string) bool {
 	m.migMu.Lock()
 	defer m.migMu.Unlock()
 
 	var t db.DownloadTask
 	if err := m.db.First(&t, "gid = ?", oldGID).Error; err != nil {
-		return // 任务已被删除,或 aria2 已抢先 follow 迁移
+		return true // 任务已被删除,或 aria2 已抢先 follow 迁移
 	}
 	if isTerminal(t.Status) {
-		return
+		return true
 	}
 
 	opts := m.taskOpts(relDir, true)
@@ -150,7 +213,7 @@ func (m *Manager) finishMagnet(oldGID, magnet, relDir, torrentB64, name string) 
 	newGID, err := m.c.AddTorrent(torrentB64, opts)
 	if err != nil {
 		logs.Errorf("aria2", "磁力转种子后添加任务失败(%s): %v", oldGID, err)
-		return // 留着原磁力任务,让 aria2 继续等
+		return false // 留着原磁力任务(挂起),等下次重试
 	}
 	// 让 aria2 忘掉磁力元数据任务,免得它 follow 完再迁出一条重复任务
 	_ = m.c.Remove(oldGID)
@@ -167,4 +230,5 @@ func (m *Manager) finishMagnet(oldGID, magnet, relDir, torrentB64, name string) 
 	m.db.Create(&nt)
 	m.db.Delete(&db.DownloadTask{}, "gid = ?", oldGID)
 	logs.Errorf("aria2", "磁力转种子成功:%s → %s", name, newGID)
+	return true
 }

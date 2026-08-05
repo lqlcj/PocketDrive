@@ -301,7 +301,7 @@ export default function Downloads() {
                                             暂停
                                         </Button>
                                     )}
-                                    {t.status === 'paused' && (
+                                    {t.status === 'paused' && !t.url.startsWith('magnet:') && (
                                         <Button
                                             size="sm"
                                             onClick={() =>

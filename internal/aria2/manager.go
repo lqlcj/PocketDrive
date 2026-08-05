@@ -41,6 +41,11 @@ type Manager struct {
 	// 可能并发,不加锁会迁出重复任务。
 	migMu sync.Mutex
 
+	// magnetMu / magnetJobs:正在进行的「磁力转种子」任务。按 gid 记,
+	// 负责去重(同一磁力只转一次)、失败后由前端「重试」再拉起。
+	magnetMu   sync.Mutex
+	magnetJobs map[string]*magnetJob
+
 	verMu   sync.Mutex
 	version string
 	verAt   time.Time
@@ -71,12 +76,13 @@ func (m *Manager) Degraded() bool { return m.degraded.Load() }
 // 目录在本进程眼里的路径(单容器/本机开发时两者相同)。
 func NewManager(gdb *gorm.DB, c *Client, dataRoot, localDir string) *Manager {
 	return &Manager{
-		db:       gdb,
-		c:        c,
-		dataRoot: dataRoot,
-		localDir: localDir,
-		speeds:   make(map[string]int64),
-		stop:     make(chan struct{}),
+		db:         gdb,
+		c:          c,
+		dataRoot:   dataRoot,
+		localDir:   localDir,
+		speeds:     make(map[string]int64),
+		magnetJobs: make(map[string]*magnetJob),
+		stop:       make(chan struct{}),
 	}
 }
 
@@ -301,7 +307,17 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	if err := validDownloadDir(relDir); err != nil {
 		return nil, err
 	}
-	opts := m.taskOpts(relDir, strings.HasPrefix(rawURL, "magnet:"))
+	isMagnet := strings.HasPrefix(rawURL, "magnet:")
+	// 磁力元数据由 PocketDrive 自己取(见 magnet.go);hash 解析不出来
+	// 的怪磁力保持原样丢给 aria2。
+	hash, _ := magnetHash(rawURL)
+	opts := m.taskOpts(relDir, isMagnet)
+	if hash != "" {
+		// 关键:磁力任务从一开始就挂起。否则 aria2 自己拉到元数据后会
+		// 立刻 follow 成真实下载、未经勾选就把整个种子写进网盘(前端的
+		// 暂停是事后补救,兜不住);挂起后 aria2 永远不会碰这个磁力。
+		opts["pause"] = "true"
+	}
 	gid, err := m.c.AddURI(rawURL, opts)
 	if err != nil {
 		m.degraded.Store(true)
@@ -310,17 +326,14 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	m.degraded.Store(false)
 	m.ensureDir(relDir)
 	t := db.DownloadTask{GID: gid, URL: rawURL, Dir: relDir, Status: "active"}
+	if hash != "" {
+		t.Status = "paused"
+	}
 	if err := m.db.Create(&t).Error; err != nil {
 		return nil, err
 	}
-	// 磁力:aria2 只负责「先挂着拉元数据」,元数据由 PocketDrive 自己
-	// 用 DHT + tracker 取到后转成 .torrent 再走 AddTorrent(和上传种子
-	// 同一条路),转完会在 finishMagnet 里迁移记录。aria2 自己拉不到的
-	// 磁力这里基本都能救回来;转不出来时原磁力任务还在,不丢任务。
-	if strings.HasPrefix(rawURL, "magnet:") {
-		if hash, err := magnetHash(rawURL); err == nil {
-			m.startMagnetConvert(gid, rawURL, relDir, hash)
-		}
+	if hash != "" {
+		m.startMagnetConvert(gid, rawURL, relDir, hash)
 	}
 	return &t, nil
 }
@@ -394,6 +407,9 @@ func (m *Manager) resolveGID(gid string) string {
 // 之前只有一条 [METADATA] 伪文件(前端据此判断「还不能选」);.torrent
 // 添加后立刻就有完整清单。
 func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
+	// 磁力:确保有转换任务在跑(首次由 Add 拉起;失败后前端「重试」/
+	// 轮询到这里会重新拉起)。
+	m.ensureMagnetConvert(gid)
 	cur := m.resolveGID(gid)
 	st, err := m.c.TellStatus(cur)
 	if err != nil {

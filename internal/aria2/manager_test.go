@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pocketdrive/internal/db"
 )
@@ -17,6 +18,7 @@ type mockAria2 struct {
 	t              *testing.T
 	statuses       map[string]*Status // gid -> status
 	added          []string           // uris received by addUri
+	addPaused      []string           // pause option received by addUri
 	dirs           []string
 	torrentPaused  []string // pause option received by addTorrent
 	lastSelect     string   // select-file passed to changeOption
@@ -62,8 +64,12 @@ func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(req.Params[2], &opts)
 		m.added = append(m.added, uris[0])
 		m.dirs = append(m.dirs, opts["dir"])
+		m.addPaused = append(m.addPaused, opts["pause"])
 		gid := nextGID()
 		m.statuses[gid] = &Status{GID: gid, Status: "active"}
+		if opts["pause"] == "true" {
+			m.statuses[gid].Status = "paused"
+		}
 		write(gid)
 	case "aria2.addTorrent":
 		var opts map[string]string
@@ -607,6 +613,91 @@ func TestFinishMagnetMigrates(t *testing.T) {
 	_, tasks = m.List()
 	if len(tasks) != 0 {
 		t.Fatalf("按旧 gid 删除后应无任务,got %d", len(tasks))
+	}
+}
+
+// 磁力任务必须从一开始就挂起:元数据由 PocketDrive 自己取,不让 aria2
+// 拉到后立刻 follow 成真实下载偷写入网盘。
+func TestAddMagnetPaused(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("12", 20)
+	task, err := m.Add(magnet, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.addPaused) != 1 || mock.addPaused[0] != "true" {
+		t.Fatalf("磁力任务应带 pause=true 提交,得到 %v", mock.addPaused)
+	}
+	if task.Status != "paused" {
+		t.Fatalf("磁力任务落库应为 paused,得到 %q", task.Status)
+	}
+	_, tasks := m.List()
+	if tasks[0].Status != "paused" {
+		t.Fatalf("列表里的磁力任务应为 paused,得到 %q", tasks[0].Status)
+	}
+
+	// 普通直链不受影响
+	if _, err := m.Add("https://a.com/f.iso", ""); err != nil {
+		t.Fatal(err)
+	}
+	if mock.addPaused[1] != "" {
+		t.Fatalf("直链不该带 pause,得到 %q", mock.addPaused[1])
+	}
+}
+
+// 同一磁力只允许一个转换在跑;失败后由 ensureMagnetConvert(前端重试触发)
+// 重新拉起,但要在退避窗口之后。
+func TestMagnetConvertDedupeAndRetry(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("34", 20)
+	task, err := m.Add(magnet, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Add 拉起一次
+	m.magnetMu.Lock()
+	_, exists := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if !exists {
+		t.Fatal("Add 后应已登记磁力转换 job")
+	}
+
+	// 重复拉起被去重(不叠加 goroutine 计数,只验证不 panic 且还是同一个 job)
+	m.startMagnetConvert(task.GID, magnet, "bt", strings.Repeat("34", 20))
+	m.magnetMu.Lock()
+	j := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if j == nil || !j.running {
+		t.Fatalf("job 应在跑: %+v", j)
+	}
+
+	// 模拟转换失败:job 摘掉 running,记下失败时间
+	m.magnetMu.Lock()
+	j.running = false
+	j.lastErrAt = time.Now()
+	m.magnetMu.Unlock()
+
+	// 退避期内 ensure 不重启
+	m.ensureMagnetConvert(task.GID)
+	m.magnetMu.Lock()
+	still := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if still == nil || still.running {
+		t.Fatal("退避期内不该重启转换")
+	}
+
+	// 退避期过后(把时间拨回去)重新拉起
+	m.magnetMu.Lock()
+	still.lastErrAt = time.Now().Add(-10 * time.Second)
+	m.magnetMu.Unlock()
+	m.ensureMagnetConvert(task.GID)
+	m.magnetMu.Lock()
+	again := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if again == nil || !again.running {
+		t.Fatal("退避期过后应重新拉起转换")
 	}
 }
 
