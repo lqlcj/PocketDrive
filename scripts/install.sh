@@ -91,6 +91,7 @@ services:
         environment:
             - WATCHTOWER_HTTP_API_TOKEN=\${POCKETDRIVE_UPDATER_TOKEN}
             - WATCHTOWER_HTTP_API_METRICS=false
+            - DOCKER_API_VERSION=1.40
         volumes:
             - /var/run/docker.sock:/var/run/docker.sock:ro
         read_only: true

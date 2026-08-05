@@ -38,8 +38,9 @@ RUN apk add --no-cache curl \
     && chmod +x /bundled/yt-dlp
 
 FROM alpine:3.22
-# ffmpeg 仅用于 yt-dlp 流合并(remux)和视频封面抽帧,不做转码
-RUN apk add --no-cache ca-certificates tzdata ffmpeg
+# ffmpeg 用于 yt-dlp 流合并/remux；Node.js 用于 yt-dlp-ejs 解 YouTube
+# 播放器挑战。yt-dlp 官方要求 Node >= 22，并且需要显式启用。
+RUN apk add --no-cache ca-certificates tzdata ffmpeg nodejs
 COPY --from=ytdlp /bundled /opt/pocketdrive/bin
 COPY --from=gobuild /out/pocketdrive /usr/local/bin/pocketdrive
 ENV POCKETDRIVE_ADDR=:16688 \

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pocketdrive/internal/db"
 )
@@ -39,6 +40,18 @@ func TestNormalizeCookiesRejectsGarbage(t *testing.T) {
 		if _, err := normalizeCookies(s); err == nil {
 			t.Fatalf("应当拒绝: %q", s)
 		}
+	}
+}
+
+func TestInspectCookiesRecognizesModernAuthAndExactDomains(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	raw := strings.Join([]string{
+		".youtube.com\tTRUE\t/\tTRUE\t1800000000\t__Secure-3PSID\tvalue",
+		"notyoutube.com\tTRUE\t/\tTRUE\t1800000000\tSID\twrong-domain",
+	}, "\n")
+	status := inspectCookies(raw, now)
+	if !status.Valid || status.CookieCount != 1 || status.AuthCount != 1 {
+		t.Fatalf("现代 cookies 或域名判断错误: %+v", status)
 	}
 }
 

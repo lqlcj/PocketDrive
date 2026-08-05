@@ -141,7 +141,11 @@ const netscapeHeader = "# Netscape HTTP Cookie File"
 
 var youtubeAuthCookies = map[string]bool{
 	"SID": true, "HSID": true, "SSID": true, "APISID": true, "SAPISID": true,
-	"__Secure-1PAPISID": true, "__Secure-3PAPISID": true, "LOGIN_INFO": true,
+	"__Secure-1PAPISID": true, "__Secure-3PAPISID": true,
+	"__Secure-1PSID": true, "__Secure-3PSID": true,
+	"__Secure-1PSIDTS": true, "__Secure-3PSIDTS": true,
+	"__Secure-1PSIDCC": true, "__Secure-3PSIDCC": true,
+	"LOGIN_INFO": true,
 }
 
 // inspectCookies 只统计域名、名称和过期时间，不保存也不返回 cookie 值。
@@ -159,7 +163,8 @@ func inspectCookies(raw string, now time.Time) cookieStatus {
 			continue
 		}
 		domain := strings.TrimPrefix(strings.ToLower(fields[0]), ".")
-		if !strings.HasSuffix(domain, "youtube.com") && !strings.HasSuffix(domain, "google.com") {
+		if domain != "youtube.com" && !strings.HasSuffix(domain, ".youtube.com") &&
+			domain != "google.com" && !strings.HasSuffix(domain, ".google.com") {
 			continue
 		}
 		st.CookieCount++

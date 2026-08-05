@@ -45,8 +45,8 @@ const PRESET_LABEL: Record<string, string> = {
 // --extractor-args youtube:player_client= 的候选。不同客户端对 PO Token
 // 和账号 cookie 的要求不一样,YouTube 还时不时改规则,所以留给用户试。
 const PLAYER_CLIENTS = [
-    { key: '', label: '默认(由 yt-dlp 自己挑)' },
-    { key: 'tv', label: 'tv(配 cookies 时通常最稳)' },
+    { key: '', label: '默认(推荐,由 yt-dlp 自动选择)' },
+    { key: 'tv', label: 'tv' },
     { key: 'tv_simply', label: 'tv_simply(不支持账号 cookies)' },
     { key: 'web_safari', label: 'web_safari' },
     { key: 'mweb', label: 'mweb' },
@@ -266,7 +266,7 @@ function Advanced() {
                             ))}
                         </NativeSelect>
                         <p className="text-xs text-ink-soft">
-                            默认下不去时可以换一个试试;只对 YouTube 生效
+                            请优先保持默认;手动指定可能使 yt-dlp 无法组合 cookies、JS challenge 与可用格式
                         </p>
                     </div>
 

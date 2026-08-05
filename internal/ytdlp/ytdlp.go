@@ -206,13 +206,22 @@ func (m *Manager) networkArgs() []string {
 
 // hintFor 在 yt-dlp 的报错后面补一句能照着做的话。yt-dlp 原文是英文
 // 且指向 wiki,对着网页用的人看不懂也不方便去翻。
-func hintFor(log string, hasCookies bool) string {
+func hintFor(log string, hasCookies, validCookies bool) string {
 	switch {
+	case strings.Contains(log, "JavaScript runtime") ||
+		strings.Contains(log, "js-runtimes") ||
+		strings.Contains(log, "challenge solver"):
+		return "\n\n[PocketDrive] 当前镜像缺少或没有启用 YouTube 所需的 JavaScript challenge runtime。" +
+			"请升级 PocketDrive 整体镜像；只升级 yt-dlp 本身不能补上 Node.js。"
 	case strings.Contains(log, "not a bot") || strings.Contains(log, "Sign in to confirm"):
-		if hasCookies {
+		if hasCookies && validCookies {
 			return "\n\n[PocketDrive] 本次已经把 cookies 传给 yt-dlp，但 YouTube 仍拒绝了登录态。" +
 				"请重新导出已登录 YouTube 的完整 cookies；若仍失败，说明会话与 VPS 出口 IP 不匹配，" +
 				"需要让 PocketDrive 通过与浏览器相同地区/网络的代理访问。"
+		}
+		if hasCookies {
+			return "\n\n[PocketDrive] 已保存 cookies 文件，但其中没有检测到未过期的 YouTube 登录凭据。" +
+				"请重新导出 Netscape 格式的完整 youtube.com cookies。"
 		}
 		return "\n\n[PocketDrive] YouTube 把这台服务器的 IP 当成了机器人。" +
 			"到本页「高级设置」里传一份浏览器导出的 cookies.txt(或配个代理)再试。"
@@ -223,10 +232,18 @@ func hintFor(log string, hasCookies bool) string {
 	case strings.Contains(log, "ffmpeg") && strings.Contains(log, "not installed"):
 		return "\n\n[PocketDrive] 缺 ffmpeg,音视频合并做不了。"
 	case strings.Contains(log, "Requested format is not available"):
-		return "\n\n[PocketDrive] 当前播放器客户端返回的格式里没有你要的那种。" +
-			"到「高级设置」把播放器客户端从 tv 改成默认或 web_safari 再试;音频任务会自动退而求其次找可用的格式。"
+		return "\n\n[PocketDrive] yt-dlp 没有拿到可下载的音视频格式。播放器客户端请先保持“默认”；" +
+			"若前面还有 JavaScript runtime/challenge 警告，请升级 PocketDrive 整体镜像。"
 	}
 	return ""
+}
+
+// baseArgs 是每次调用 yt-dlp 都必须带的基础参数。YouTube 当前需要
+// yt-dlp-ejs + 外部 JS runtime；官方可执行文件已内置 EJS，镜像提供
+// Node.js，因此这里显式启用 node。保留 warnings，失败时才能看见 challenge
+// runtime、PO Token 和 cookies 的真实原因。
+func baseArgs() []string {
+	return []string{"--ignore-config", "--newline", "--js-runtimes", "node"}
 }
 
 func (m *Manager) run(id uint) {
@@ -259,7 +276,7 @@ func (m *Manager) run(id uint) {
 	_ = json.Unmarshal([]byte(t.Options), &opts)
 	// 不读取宿主机的 yt-dlp 配置文件。用户配置中的 format、proxy、
 	// extractor 参数可能与网页选项冲突，导致同一个任务在不同机器上表现不同。
-	args := []string{"--ignore-config", "--newline", "--no-warnings"}
+	args := baseArgs()
 	// 反机器人相关的三样(cookies / 代理 / player client)全部来自设置,
 	// 值走白名单或格式校验,不存在把用户输入拼成别的参数的可能
 	args = append(args, m.networkArgs()...)
@@ -303,7 +320,7 @@ func (m *Manager) run(id uint) {
 		m.finish(&t, "canceled", "")
 	case err != nil:
 		hasCookies, _, status := m.cookieInfo()
-		m.finish(&t, "error", lastLines(t.LogTail, 5)+hintFor(t.LogTail, hasCookies && status.Valid))
+		m.finish(&t, "error", lastLines(t.LogTail, 8)+hintFor(t.LogTail, hasCookies, status.Valid))
 	default:
 		t.Progress = 100
 		m.finish(&t, "done", "")
