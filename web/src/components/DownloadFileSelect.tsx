@@ -35,6 +35,9 @@ export default function DownloadFileSelect({
     const [failed, setFailed] = useState(false);
     const [checked, setChecked] = useState<Set<number>>(new Set());
     const [reload, setReload] = useState(0);
+    // 磁力等元数据的秒数:超过时限还没拿到就提示,不无限转圈
+    const [elapsed, setElapsed] = useState(0);
+    const MAGNET_TIMEOUT = 120;
 
     useEffect(() => {
         setFiles([]);
@@ -42,10 +45,11 @@ export default function DownloadFileSelect({
         setLoading(true);
         setFailed(false);
         setChecked(new Set());
+        setElapsed(0);
         let cancelled = false;
         let tries = 0;
-        // 种子添加后立刻就有清单;磁力要等元数据,不给次数上限
-        const limit = item.magnet ? Infinity : 8;
+        // 种子添加后立刻就有清单;磁力要等元数据,给个时限免得永远转圈
+        const limit = item.magnet ? MAGNET_TIMEOUT : 8;
         const poll = async () => {
             if (cancelled) return;
             tries++;
@@ -83,6 +87,13 @@ export default function DownloadFileSelect({
         };
     }, [item.gid, item.magnet, reload]);
 
+    // 磁力:每秒累计等待时长,loading 文案里显示
+    useEffect(() => {
+        if (!item.magnet || !loading) return;
+        const id = setInterval(() => setElapsed((e) => e + 1), 1000);
+        return () => clearInterval(id);
+    }, [item.magnet, loading]);
+
     const allIndexes = files.map((f) => f.index);
     const allChecked = files.length > 0 && allIndexes.every((i) => checked.has(i));
     const selectedCount = checked.size;
@@ -117,13 +128,31 @@ export default function DownloadFileSelect({
                     <RefreshCw className="size-5 animate-spin" />
                     <span>
                         {item.magnet
-                            ? '正在获取种子信息…(磁力链接要先下载元数据,稍等)'
+                            ? `正在获取种子信息…(磁力要先下载元数据,已等 ${elapsed} 秒)`
                             : '正在读取种子文件清单…'}
                     </span>
+                    {item.magnet && elapsed >= 15 && (
+                        <span className="text-xs max-w-md text-center leading-relaxed">
+                            元数据需要从做种节点或 tracker 拉取,通常几十秒内完成。
+                            如果迟迟没有动静,多半是磁力没人做种、或 aria2 容器的
+                            DHT/BT 端口(6888 UDP)被防火墙挡了。
+                        </span>
+                    )}
                 </div>
             ) : failed ? (
                 <div className="flex flex-col items-center gap-3 py-6 text-sm text-ink-soft">
-                    <span>没能拿到种子文件列表(aria2 可能暂时不可达)</span>
+                    <span>
+                        {item.magnet
+                            ? '超过 2 分钟还没拿到种子信息。磁力没人做种、tracker 失效,'
+                              + '或 aria2 容器的 DHT/BT 端口(6888 UDP)被防火墙挡了都可能这样。'
+                            : '没能拿到种子文件列表(aria2 可能暂时不可达)'}
+                    </span>
+                    {item.magnet && (
+                        <span className="text-xs max-w-md text-center leading-relaxed">
+                            建议:确认防火墙放行 6888(TCP+UDP);如果这个磁力一直没人做种,
+                            换用 .torrent 种子文件上传通常更快。
+                        </span>
+                    )}
                     <div className="flex gap-2">
                         <Button
                             size="sm"
