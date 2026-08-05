@@ -15,7 +15,6 @@ import (
 	"pocketdrive/internal/aria2"
 	"pocketdrive/internal/auth"
 	"pocketdrive/internal/cloud"
-	"pocketdrive/internal/components"
 	"pocketdrive/internal/config"
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
@@ -27,8 +26,6 @@ import (
 	"pocketdrive/internal/storage"
 	"pocketdrive/internal/thumbs"
 	"pocketdrive/internal/trash"
-	"pocketdrive/internal/updater"
-	"pocketdrive/internal/ytdlp"
 )
 
 func main() {
@@ -59,11 +56,6 @@ func main() {
 
 	cloudSvc := cloud.New(gdb)
 
-	// yt-dlp 装在 volume 内(网页里可升级),aria2 在自己的容器里,
-	// ffmpeg 随镜像走
-	comps := components.New(cfg.ComponentsDir, cfg.ComponentsBundled)
-	comps.EnsureBundled(components.Ytdlp)
-
 	fileSvc, err := files.New(cfg.DataDir, filepath.Join(filepath.Dir(cfg.DBPath), "uploads"), cloudSvc, gdb)
 	if err != nil {
 		log.Fatalf("init files: %v", err)
@@ -78,14 +70,9 @@ func main() {
 		aria2.NewClient(cfg.Aria2RPC, cfg.Aria2Secret), cfg.Aria2DataDir, cfg.DataDir)
 	aria2Mgr.Start()
 
-	// cookies 之类的凭据和 DB 放一起,不进网盘
-	ytdlpMgr := ytdlp.NewManager(gdb, comps.Path(components.Ytdlp), cfg.DataDir,
-		filepath.Dir(cfg.DBPath))
-	ytdlpMgr.Start()
-
 	// 缩略图缓存放 DB 同级目录,不会出现在网盘/WebDAV 里
 	thumbSvc := thumbs.New(fileSvc, filepath.Join(filepath.Dir(cfg.DBPath), "thumbs"),
-		func() string { return comps.Path(components.FFmpeg) })
+		func() string { return "ffmpeg" })
 	shareSvc := share.New(gdb, fileSvc, thumbSvc, cloudSvc)
 
 	trashSvc := trash.New(gdb, fileSvc, cloudSvc)
@@ -94,25 +81,18 @@ func main() {
 	indexSvc := index.New(fileSvc.Root().FS())
 	iconsSvc := icons.New(gdb)
 	archiveSvc := archive.New(gdb, fileSvc, cloudSvc, authSvc, cfg.DBPath, config.Version)
-	compSvc := components.NewService(comps, gdb, aria2Mgr.Version,
-		func() bool { return !aria2Mgr.Degraded() })
-	updateSvc := updater.New(cfg.UpdaterURL, cfg.UpdaterToken)
-
 	srv := server.New(cfg, server.Deps{
-		Auth:       authSvc,
-		Files:      fileSvc,
-		Storage:    storageSvc,
-		Aria2:      aria2Mgr,
-		Ytdlp:      ytdlpMgr,
-		Share:      shareSvc,
-		Thumbs:     thumbSvc,
-		Trash:      trashSvc,
-		Index:      indexSvc,
-		Icons:      iconsSvc,
-		Cloud:      cloudSvc,
-		Archive:    archiveSvc,
-		Components: compSvc,
-		Updater:    updateSvc,
+		Auth:    authSvc,
+		Files:   fileSvc,
+		Storage: storageSvc,
+		Aria2:   aria2Mgr,
+		Share:   shareSvc,
+		Thumbs:  thumbSvc,
+		Trash:   trashSvc,
+		Index:   indexSvc,
+		Icons:   iconsSvc,
+		Cloud:   cloudSvc,
+		Archive: archiveSvc,
 	})
 
 	// docker stop 会发 SIGTERM:把正在传的请求收完再退,别让用户的

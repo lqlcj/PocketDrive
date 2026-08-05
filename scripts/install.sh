@@ -45,19 +45,11 @@ else
         say "已补写 aria2 RPC 密钥"
     fi
 fi
-if ! grep -q '^POCKETDRIVE_UPDATER_TOKEN=' .env; then
-    echo "POCKETDRIVE_UPDATER_TOKEN=$(rand 32)" >> .env
-    chmod 600 .env
-    say "已生成内部升级服务密钥"
-fi
-
 cat > docker-compose.yml <<EOF
 services:
     pocketdrive:
         image: $IMAGE
         container_name: pocketdrive
-        labels:
-            com.centurylinklabs.watchtower.enable: "true"
         restart: unless-stopped
         init: true
         ports:
@@ -70,36 +62,11 @@ services:
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
             - POCKETDRIVE_ARIA2_SECRET=\${ARIA2_SECRET}
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
-            - POCKETDRIVE_UPDATER_URL=http://pocketdrive-updater:8080
-            - POCKETDRIVE_UPDATER_TOKEN=\${POCKETDRIVE_UPDATER_TOKEN}
         volumes:
             - ./data:/data
             - ./config:/config
         depends_on:
             - aria2
-        networks:
-            - default
-            - update-internal
-
-    pocketdrive-updater:
-        image: containrrr/watchtower:1.7.1
-        container_name: pocketdrive-updater
-        labels:
-            com.centurylinklabs.watchtower.enable: "false"
-        restart: unless-stopped
-        command: --http-api-update --http-api-periodic-polls=false --label-enable --cleanup
-        environment:
-            - WATCHTOWER_HTTP_API_TOKEN=\${POCKETDRIVE_UPDATER_TOKEN}
-            - WATCHTOWER_HTTP_API_METRICS=false
-            - DOCKER_API_VERSION=1.40
-        volumes:
-            - /var/run/docker.sock:/var/run/docker.sock:ro
-        read_only: true
-        cap_drop: [ALL]
-        security_opt: [no-new-privileges:true]
-        networks:
-            - update-internal
-
     aria2:
         image: p3terx/aria2-pro
         container_name: pocketdrive-aria2
@@ -142,5 +109,5 @@ echo   "  数据目录 : $DIR/data"
 echo
 warn "防火墙/安全组记得放行:16688/tcp(网页+WebDAV);6888/tcp+udp(BT 可选,不开也能下载只是慢)"
 warn "升级:重跑本脚本,或 cd $DIR && docker compose pull && docker compose up -d"
-warn "yt-dlp 单独在网页「设置 → 组件状态」里升级即可,不用动服务器"
+say "升级请在 1Panel 中拉取最新镜像并重建编排"
 warn "卸载:cd $DIR && docker compose down(数据保留在 data/)"

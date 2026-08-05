@@ -48,10 +48,10 @@ func TestErrorfWritesAndTails(t *testing.T) {
 	}
 }
 
-// 多行错误(yt-dlp 的输出常常是几行)要缩进,不然和下一条混在一起
+	// 多行错误输出要缩进,不然和下一条混在一起
 func TestMultilineIndented(t *testing.T) {
 	reset(t)
-	Errorf("ytdlp", "失败:\n第一行\n第二行")
+	Errorf("system", "失败:\n第一行\n第二行")
 	text, _ := Tail(0)
 	if !strings.Contains(text, "\n    第一行\n    第二行") {
 		t.Fatalf("续行没缩进: %q", text)

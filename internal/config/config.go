@@ -9,8 +9,8 @@ const Version = "0.5.0"
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
 	Addr string
-	// DataDir is the root of the drive; all file operations, WebDAV,
-	// aria2 and yt-dlp downloads live under this single directory.
+	// DataDir is the root of the drive; all file operations, WebDAV and aria2
+	// downloads live under this single directory.
 	DataDir string
 	// DBPath is the SQLite database file (kept outside DataDir so it
 	// doesn't show up in the drive / WebDAV listing).
@@ -28,20 +28,6 @@ type Config struct {
 	// Aria2DataDir is DataDir as seen by the aria2 process (differs from
 	// DataDir only if aria2 runs in another container with another mount).
 	Aria2DataDir string
-
-	// ComponentsDir 是被托管组件的安装目录,必须落在可写且持久的卷内,
-	// 网页里的升级才不会被容器重启抹掉。目前只有 yt-dlp 装在这里——它
-	// 一年发上百个版本,跟着镜像走太慢。aria2 随它自己的容器、ffmpeg
-	// 随主镜像,都用 docker compose pull 升级。
-	// 留空表示不托管:一律用 PATH 里的版本(本机开发即如此)。
-	ComponentsDir string
-	// ComponentsBundled 是镜像内置的只读副本目录,首次启动时复制进
-	// ComponentsDir。
-	ComponentsBundled string
-	// UpdaterURL/Token point to the private updater sidecar. Empty disables
-	// the web upgrade button and keeps manual 1Panel upgrades available.
-	UpdaterURL   string
-	UpdaterToken string
 }
 
 func Load() (*Config, error) {
@@ -55,11 +41,6 @@ func Load() (*Config, error) {
 		// 官方 compose 里指向 aria2 容器;本机开发默认连本地 aria2c
 		Aria2RPC:    envOr("POCKETDRIVE_ARIA2_RPC", "http://127.0.0.1:6800/jsonrpc"),
 		Aria2Secret: os.Getenv("POCKETDRIVE_ARIA2_SECRET"),
-
-		ComponentsDir:     os.Getenv("POCKETDRIVE_BIN_DIR"),
-		ComponentsBundled: os.Getenv("POCKETDRIVE_BIN_BUNDLED"),
-		UpdaterURL:        os.Getenv("POCKETDRIVE_UPDATER_URL"),
-		UpdaterToken:      os.Getenv("POCKETDRIVE_UPDATER_TOKEN"),
 	}
 	cfg.Aria2DataDir = envOr("POCKETDRIVE_ARIA2_DATA_DIR", cfg.DataDir)
 	return cfg, nil

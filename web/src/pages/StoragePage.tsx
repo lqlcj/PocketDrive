@@ -316,19 +316,15 @@ export default function StoragePage() {
                     · 上传由服务器中转、下载 302 到预签名地址,浏览器只和本站通信,
                     <b>桶上无需配置 CORS</b>,私有桶即可,不用开公开访问
                 </p>
-                <p>
-                    · Cloudflare R2 填法:Endpoint 是
-                    <code className="bg-paper-2 rounded px-1 mx-1">
-                        https://&lt;账户ID&gt;.r2.cloudflarestorage.com
-                    </code>
-                    (R2 概览页可复制),Region 留空即可;密钥在「R2 → 管理 R2 API
-                    令牌」创建(对象读和写权限)
-                </p>
+                <b>· Cloudflare R2绑定详细教程:
+                        <a href='https://930309.xyz/blogs/ed552cf5-6704-4f7f-980b-49e74fe1ad6f'>打开教程</a>
+                    </b>
                 <p>
                     · 外部存储与本机的差异:删除不经回收站、不生成缩略图、不参与全局搜索、
-                    离线下载/yt下载仍落本机(可下载完再移动上去)
+                    离线下载仍落本机
                 </p>
                 <p>· WebDAV 里同样能看到 @挂载名 文件夹,手机播放器可直接播放桶里的文件</p>
+
             </Card>
 
             {/* 添加/编辑 */}

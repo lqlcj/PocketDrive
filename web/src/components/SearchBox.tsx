@@ -61,7 +61,7 @@ export default function SearchBox() {
     };
 
     return (
-        <div ref={boxRef} className="relative w-full max-w-xs">
+        <div ref={boxRef} className="relative w-full md:max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-ink-soft pointer-events-none" />
             <input
                 value={q}

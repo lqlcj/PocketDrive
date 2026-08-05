@@ -67,23 +67,43 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
                         className="max-w-full max-h-[65vh] rounded-xl inline-block"
                     />
                     {imageIdxs.length > 1 && (
-                        <div className="flex items-center justify-center gap-3 mt-3 text-ink-soft text-sm">
+                        <div className="flex items-center justify-center gap-2 mt-3 text-ink-soft text-sm">
                             <Button
-                                size="sm"
+                                size="default"
+                                className="hidden sm:inline-flex"
                                 disabled={imgPos <= 0}
                                 onClick={() => onNavigate(imageIdxs[imgPos - 1]!)}
                             >
                                 ← 上一张
                             </Button>
-                            <span>
+                            <Button
+                                size="icon"
+                                className="sm:hidden"
+                                disabled={imgPos <= 0}
+                                onClick={() => onNavigate(imageIdxs[imgPos - 1]!)}
+                                aria-label="上一张"
+                            >
+                                ←
+                            </Button>
+                            <span className="tabular-nums">
                                 {imgPos + 1} / {imageIdxs.length}
                             </span>
                             <Button
-                                size="sm"
+                                size="default"
+                                className="hidden sm:inline-flex"
                                 disabled={imgPos >= imageIdxs.length - 1}
                                 onClick={() => onNavigate(imageIdxs[imgPos + 1]!)}
                             >
                                 下一张 →
+                            </Button>
+                            <Button
+                                size="icon"
+                                className="sm:hidden"
+                                disabled={imgPos >= imageIdxs.length - 1}
+                                onClick={() => onNavigate(imageIdxs[imgPos + 1]!)}
+                                aria-label="下一张"
+                            >
+                                →
                             </Button>
                         </div>
                     )}

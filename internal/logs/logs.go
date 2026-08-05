@@ -96,7 +96,7 @@ func rotate() error {
 	return nil
 }
 
-// Errorf 记一条错误。component 是出问题的模块名(files / aria2 / ytdlp …),
+// Errorf 记一条错误。component 是出问题的模块名(files / aria2 等),
 // 出现在每行开头,方便过滤。
 func Errorf(component, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
@@ -120,7 +120,7 @@ func Errorf(component, format string, args ...any) {
 		}
 		return
 	}
-	// 多行错误(比如 yt-dlp 的输出)缩进续行,避免和下一条混在一起
+	// 多行错误输出缩进续行,避免和下一条混在一起
 	line := time.Now().Format("15:04:05") + " [" + component + "] " +
 		strings.ReplaceAll(strings.TrimRight(msg, "\n"), "\n", "\n    ") + "\n"
 	n, err := file.WriteString(line)

@@ -292,6 +292,7 @@ export default function Files() {
     const [deleteNames, setDeleteNames] = useState<string[]>([]);
     const [iconTarget, setIconTarget] = useState<FileEntry | null>(null);
     const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+    const [treeOpen, setTreeOpen] = useState(false);
 
     // 全局搜索点结果跳过来时要高亮的名字:翻到它那一页 + 滚过去 + 闪几下
     const [flash, setFlash] = useState<string | null>(null);
@@ -1089,6 +1090,14 @@ export default function Files() {
                 {/* 挂载的外部存储在根目录就是 @名称 文件夹,进出靠点目录树,
                     不再单独放一个存储切换下拉框 */}
                 <div className="ml-auto flex gap-1.5 items-center">
+                    <Button
+                        size="sm"
+                        className="lg:hidden"
+                        aria-label="目录树"
+                        onClick={() => setTreeOpen(true)}
+                    >
+                        <Home className="size-3.5" /> 目录
+                    </Button>
                     <input
                         ref={fileInput}
                         type="file"
@@ -1279,7 +1288,7 @@ export default function Files() {
             <div className="flex gap-4 items-start">
                 {/* 目录树 */}
                 <FileTree
-                    className="hidden lg:block w-52 shrink-0 max-h-[72vh] sticky top-20"
+                    className="hidden lg:block w-52 shrink-0 max-h-[calc(var(--vh)*72)] sticky top-20"
                     currentPath={path}
                     refreshKey={treeVersion}
                     icons={icons}
@@ -1333,7 +1342,7 @@ export default function Files() {
                                                     // 一旦超过容器宽度,flex-wrap 会让它独占一行(而不是
                                                     // 收缩),大小/时间/操作被挤到第二行,整行就被撑高了。
                                                     // 手机上仍然换行——那边本来就是名字一行、操作一行。
-                                                    'group/row flex items-center gap-2.5 px-3 py-1.5 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 flex-wrap sm:flex-nowrap select-none transition-opacity',
+                                                    'group/row flex items-center gap-2.5 px-3 py-2.5 sm:py-1.5 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 flex-wrap sm:flex-nowrap select-none transition-opacity',
                                                     on && 'bg-leaf-soft/60',
                                                     e.name === flash && 'pd-flash',
                                                     selectMode &&
@@ -1544,7 +1553,7 @@ export default function Files() {
                         ) : (
                             <>
                                 把文件拖到左侧目录树或列表里的文件夹上就能移动,拖着悬停一会儿会自动展开子目录;
-                                Ctrl/⌘ 点或 Shift 点名字可以多选,选中后整批一起拖。
+                                Ctrl/⌘ 点或 Ctrl 点名字可以多选,选中后整批一起拖。
                                 要成批地选就点右上角「批量操作」,进去可以拖动框选。
                                 从桌面拖文件进来是上传,超过 64MB 自动分片
                             </>
@@ -1872,6 +1881,22 @@ export default function Files() {
                     onClose={() => setPreviewIdx(null)}
                 />
             )}
+
+            {/* 移动端目录树弹窗 */}
+            <Dialog open={treeOpen} onOpenChange={(o) => !o && setTreeOpen(false)}>
+                <DialogContent title="目录" wide>
+                    <FileTree
+                        className="max-h-[calc(var(--vh)*60)] overflow-auto"
+                        currentPath={path}
+                        refreshKey={treeVersion}
+                        icons={icons}
+                        onNavigate={(p) => {
+                            navigate(`/files/${p}`);
+                            setTreeOpen(false);
+                        }}
+                    />
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

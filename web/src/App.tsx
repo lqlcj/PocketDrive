@@ -9,7 +9,6 @@ import Files from './pages/Files';
 import NoteEditor from './pages/NoteEditor';
 import Downloads from './pages/Downloads';
 import DownloadSettings from './pages/DownloadSettings';
-import VideoDL from './pages/VideoDL';
 import SharesPage from './pages/SharesPage';
 import Trash from './pages/Trash';
 import Settings from './pages/Settings';
@@ -51,7 +50,6 @@ function Private({
                         <Route path="/note/*" element={<NoteEditor />} />
                         <Route path="/downloads" element={<Downloads />} />
                         <Route path="/downloads/settings" element={<DownloadSettings />} />
-                        <Route path="/video" element={<VideoDL />} />
                         <Route path="/shares" element={<SharesPage />} />
                         <Route path="/trash" element={<Trash />} />
                         <Route path="/storage" element={<StoragePage />} />

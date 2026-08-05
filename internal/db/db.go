@@ -26,21 +26,6 @@ type DownloadTask struct {
 	UpdatedAt       time.Time `json:"-"`
 }
 
-type YtdlpTask struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	URL       string    `json:"url"`
-	Dir       string    `json:"dir"`
-	Preset    string    `json:"preset"`
-	Options   string    `json:"options"` // JSON:嵌入封面/元数据/字幕等开关
-	Status    string    `json:"status"`
-	Progress  float64   `json:"progress"`
-	Title     string    `json:"title"`
-	LogTail   string    `json:"logTail"`
-	ErrorMsg  string    `json:"errorMsg"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"-"`
-}
-
 type Share struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	Token        string     `gorm:"uniqueIndex;size:32" json:"token"`
@@ -129,7 +114,7 @@ func Open(path string) (*gorm.DB, error) {
 	}
 	// glebarez/sqlite 纯 Go 驱动,单连接避免写锁竞争
 	sqlDB.SetMaxOpenConns(1)
-	if err := g.AutoMigrate(&Setting{}, &DownloadTask{}, &YtdlpTask{}, &Share{}, &TrashItem{}, &FolderIcon{}, &StoragePolicy{}, &UploadSession{}, &ArchiveTask{}); err != nil {
+	if err := g.AutoMigrate(&Setting{}, &DownloadTask{}, &Share{}, &TrashItem{}, &FolderIcon{}, &StoragePolicy{}, &UploadSession{}, &ArchiveTask{}); err != nil {
 		return nil, err
 	}
 	return g, nil

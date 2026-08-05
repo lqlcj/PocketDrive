@@ -14,7 +14,6 @@ import {
     TreePalm,
     Trash2,
     X,
-    Youtube,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
@@ -31,7 +30,6 @@ import { cn } from '../lib/utils';
 const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }> = [
     { to: '/files', label: '我的文件', icon: FolderOpen },
     { to: '/downloads', label: '离线下载', icon: CloudDownload, end: true },
-    { to: '/video', label: 'yt下载', icon: Youtube },
     { to: '/shares', label: '分享管理', icon: Link2 },
     { to: '/trash', label: '垃圾桶', icon: Trash2 },
     { to: '/storage-settings', label: '储存策略', icon: HardDrive },
@@ -123,30 +121,38 @@ export default function Layout({
     return (
         <div className="min-h-screen flex">
             {/* 桌面侧栏 */}
-            <aside className="hidden md:flex flex-col w-56 shrink-0 sticky top-0 h-screen bg-paper border-r border-line/70 p-4">
+            <aside className="hidden md:flex flex-col w-56 shrink-0 sticky top-0 h-[calc(var(--vh)*100)] bg-paper border-r border-line/70 p-4">
                 {sidebarInner}
             </aside>
 
-            {/* 移动端抽屉 */}
-            {mobileOpen && (
-                <div className="fixed inset-0 z-50 md:hidden">
+            {/* 移动端抽屉:滑入/滑出动画 */}
+            <div
+                className={cn(
+                    'fixed inset-0 z-50 md:hidden transition-opacity duration-300',
+                    mobileOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
+                )}
+            >
+                <button
+                    aria-label="关闭菜单"
+                    className="absolute inset-0 bg-black/40 transition-opacity duration-300"
+                    onClick={() => setMobileOpen(false)}
+                />
+                <aside
+                    className={cn(
+                        'absolute left-0 top-0 bottom-0 w-64 bg-paper p-4 flex flex-col shadow-2xl transition-transform duration-300',
+                        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+                    )}
+                >
                     <button
-                        aria-label="关闭菜单"
-                        className="absolute inset-0 bg-black/40"
+                        className="absolute right-3 top-3 text-ink-soft"
+                        aria-label="关闭"
                         onClick={() => setMobileOpen(false)}
-                    />
-                    <aside className="absolute left-0 top-0 bottom-0 w-64 bg-paper p-4 flex flex-col shadow-2xl">
-                        <button
-                            className="absolute right-3 top-3 text-ink-soft"
-                            aria-label="关闭"
-                            onClick={() => setMobileOpen(false)}
-                        >
-                            <X className="size-5" />
-                        </button>
-                        {sidebarInner}
-                    </aside>
-                </div>
-            )}
+                    >
+                        <X className="size-5" />
+                    </button>
+                    {sidebarInner}
+                </aside>
+            </div>
 
             <div className="flex-1 min-w-0 flex flex-col">
                 {/* 顶栏:搜索 + 主题切换 */}

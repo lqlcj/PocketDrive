@@ -58,40 +58,6 @@ export interface TorrentFile {
     length: number;
 }
 
-export interface YtdlpOptions {
-    embedMeta?: boolean;
-    embedThumb?: boolean;
-    subs?: boolean;
-    playlist?: boolean;
-}
-
-/** yt下载的高级设置:机房 IP 被 YouTube 判定为机器人时要用 */
-export interface YtdlpSettings {
-    proxy: string;
-    playerClient: string;
-}
-
-export interface YtdlpCookieStatus {
-    valid: boolean;
-    message: string;
-    cookieCount: number;
-    authCount: number;
-}
-
-export interface YtdlpTask {
-    id: number;
-    url: string;
-    dir: string;
-    preset: string;
-    options: string;
-    status: string;
-    progress: number;
-    title: string;
-    logTail: string;
-    errorMsg: string;
-    createdAt: string;
-}
-
 export interface Share {
     id: number;
     token: string;
@@ -166,25 +132,6 @@ export interface ArchiveTask {
     errorMsg: string;
     createdAt: string;
     updatedAt: string;
-}
-
-/** 外部组件(yt-dlp / aria2 / ffmpeg)的状态,可在网页里各自升级 */
-/** 组件的升级渠道:只有 managed 能在网页里点一下就升级 */
-export type ComponentChannel = 'managed' | 'image' | 'sidecar' | 'system';
-
-export interface ComponentInfo {
-    kind: string;
-    title: string;
-    note: string;
-    installed: boolean;
-    version: string;
-    latest: string;
-    outdated: boolean;
-    channel: ComponentChannel;
-    running: boolean;
-    lastUpdated: string;
-    /** 不能在网页里升级时,替代按钮显示的一句话 */
-    updateHint: string;
 }
 
 /** 外部存储挂载的用量 */
@@ -359,14 +306,6 @@ export const api = {
     saveLocalQuota: (quotaGB: number) =>
         post<{ ok: boolean; quota: number }>('/api/v1/storage/quota', { quotaGB }),
 
-    components: () =>
-        req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),
-    installComponent: (kind: string) =>
-        post<{ ok: boolean; version: string }>('/api/v1/components/install', { kind }),
-    updateStatus: () => req<{ enabled: boolean; version: string }>('/api/v1/system/update'),
-    triggerUpdate: (password: string) =>
-        post<{ ok: boolean; version: string }>('/api/v1/system/update', { password }),
-
     /** 错误日志:只记 error,每天清空 */
     logs: () =>
         req<{ enabled: boolean; text: string; size: number }>('/api/v1/logs'),
@@ -433,29 +372,6 @@ export const api = {
             gid,
             deleteFiles,
         }),
-
-    ytdlp: () =>
-        req<{ available: boolean; version: string; tasks: YtdlpTask[] }>('/api/v1/ytdlp'),
-    addYtdlp: (url: string, dir: string, preset: string, options: YtdlpOptions) =>
-        post<{ ok: boolean }>('/api/v1/ytdlp', { url, dir, preset, options }),
-    cancelYtdlp: (id: number) => post<{ ok: boolean }>('/api/v1/ytdlp/cancel', { id }),
-    deleteYtdlp: (id: number) => post<{ ok: boolean }>('/api/v1/ytdlp/delete', { id }),
-    ytdlpSettings: () =>
-        req<{
-            settings: YtdlpSettings;
-            hasCookies: boolean;
-            cookiesUpdated: string;
-            cookiesSupported: boolean;
-            cookieStatus: YtdlpCookieStatus;
-        }>('/api/v1/ytdlp/settings'),
-    saveYtdlpSettings: (s: YtdlpSettings) =>
-        post<{ ok: boolean }>('/api/v1/ytdlp/settings', s),
-    /** content 传空串 = 删除已保存的 cookies */
-    setYtdlpCookies: (content: string) =>
-        post<{ ok: boolean; hasCookies: boolean; cookiesUpdated: string; cookieStatus: YtdlpCookieStatus }>(
-            '/api/v1/ytdlp/cookies',
-            { content },
-        ),
 
     shares: () => req<{ shares: Share[] }>('/api/v1/shares'),
     createShare: (path: string, password: string, type: string, expiresHours: number) =>

@@ -5,12 +5,10 @@
 #   B. 自己改了代码想本地构建:注释掉 image 行,取消 build 三行的注释
 #
 # 使用前:在同目录 .env 中设置 ARIA2_SECRET、POCKETDRIVE_ADMIN_PASSWORD
-# 和随机的 POCKETDRIVE_UPDATER_TOKEN。
 #
 # 以后怎么更新:
-#   yt-dlp        网页 → 设置 → 组件状态 → 升级(装在 config 卷里,重启不丢)
-#   其余全部      cd 到本目录,docker compose pull && docker compose up -d
-#                 (会一起更新 PocketDrive 本体、ffmpeg 和 aria2,数据不受影响)
+#   全部组件      cd 到本目录,docker compose pull && docker compose up -d
+#                 (会更新 PocketDrive、ffmpeg 和 aria2,数据不受影响)
 services:
     pocketdrive:
         image: ghcr.io/lqlcj/pocketdrive:latest
@@ -18,10 +16,8 @@ services:
         #     context: ..
         #     dockerfile: docker/Dockerfile
         container_name: pocketdrive
-        labels:
-            com.centurylinklabs.watchtower.enable: "true"
         restart: unless-stopped
-        # 让 docker 塞一个 init 进程当 PID 1:yt-dlp 会派生 ffmpeg,
+        # 让 docker 塞一个 init 进程当 PID 1:后台任务可能派生子进程,
         # 没有 init 时这些孙进程退出后会变成僵尸攒在容器里
         init: true
         ports:
@@ -37,37 +33,11 @@ services:
             # aria2 进程眼里的数据目录。两个容器必须挂成同一个路径,
             # 否则下载完的文件在网盘里找不到
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
-            - POCKETDRIVE_UPDATER_URL=http://pocketdrive-updater:8080
-            - POCKETDRIVE_UPDATER_TOKEN=${POCKETDRIVE_UPDATER_TOKEN:?请在.env中设置随机更新密钥}
         volumes:
             - ./data:/data
             - ./config:/config
         depends_on:
             - aria2
-        networks:
-            - default
-            - update-internal
-
-    # 只负责接收已认证的升级请求;不暴露端口,主容器不接触 Docker Socket。
-    pocketdrive-updater:
-        image: containrrr/watchtower:1.7.1
-        container_name: pocketdrive-updater
-        labels:
-            com.centurylinklabs.watchtower.enable: "false"
-        restart: unless-stopped
-        command: --http-api-update --http-api-periodic-polls=false --label-enable --cleanup
-        environment:
-            - WATCHTOWER_HTTP_API_TOKEN=${POCKETDRIVE_UPDATER_TOKEN:?请在.env中设置随机更新密钥}
-            - WATCHTOWER_HTTP_API_METRICS=false
-            - DOCKER_API_VERSION=1.40
-        volumes:
-            - /var/run/docker.sock:/var/run/docker.sock:ro
-        read_only: true
-        cap_drop: [ALL]
-        security_opt: [no-new-privileges:true]
-        networks:
-            - update-internal
-
     aria2:
         image: p3terx/aria2-pro
         container_name: pocketdrive-aria2
@@ -95,7 +65,3 @@ services:
         ports:
             - '6888:6888'
             - '6888:6888/udp'
-
-networks:
-    update-internal:
-        internal: true

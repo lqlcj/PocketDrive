@@ -50,6 +50,22 @@
 
 html {
     color-scheme: light;
+    /* iOS Safari 100vh fix */
+    height: calc(var(--vh, 1vh) * 100);
+}
+
+* {
+    -webkit-overflow-scrolling: touch;
+}
+
+body {
+    overscroll-behavior: none;
+}
+
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto {
+    overscroll-behavior: contain;
 }
 
 html.dark {

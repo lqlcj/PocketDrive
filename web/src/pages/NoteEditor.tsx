@@ -68,7 +68,7 @@ export default function NoteEditor() {
     const parentDir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 
     return (
-        <div className="flex flex-col h-[calc(100vh-120px)]">
+        <div className="flex flex-col h-[calc(var(--vh)*100-120px)]">
             <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <h2 className="text-lg font-extrabold truncate flex items-center gap-2">
                     <NotebookPen className="size-4.5 text-leaf-dark shrink-0" />
