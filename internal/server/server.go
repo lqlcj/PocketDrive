@@ -106,6 +106,8 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	// 外部存储全局开关(目前只有 WebDAV 是否直连存储桶)
 	api.HandleFunc("GET /api/v1/storages/settings", d.Cloud.HandleGetSettings)
 	api.HandleFunc("POST /api/v1/storages/settings", d.Cloud.HandleSaveSettings)
+	api.HandleFunc("GET /api/v1/auth/webdav-settings", d.Auth.HandleGetWebDAVSettings)
+	api.HandleFunc("POST /api/v1/auth/webdav-settings", d.Auth.HandleSaveWebDAVSettings)
 
 	api.HandleFunc("GET /api/v1/downloads/settings", d.Aria2.HandleGetSettings)
 	api.HandleFunc("POST /api/v1/downloads/settings", d.Aria2.HandleSaveSettings)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -33,9 +34,12 @@ type ipEntry struct {
 }
 
 type Service struct {
-	db     *gorm.DB
-	user   string
-	secret []byte
+	db            *gorm.DB
+	user          string
+	webdavEnabled bool
+	webdavUser    string
+	webdavHash    string
+	secret        []byte
 	// configDir 存放自定义头像。刻意放在网盘目录之外:否则头像会出现
 	// 在文件列表和 WebDAV 里,还会被整盘备份带走
 	configDir string
@@ -110,7 +114,80 @@ func New(gdb *gorm.DB, user, initialPass, configDir string) (*Service, error) {
 	} else {
 		s.user = storedUser
 	}
+	s.webdavEnabled = s.getSettingOr("webdav_enabled", "true") != "false"
+	s.webdavUser = s.getSettingOr("webdav_user", s.user)
+	s.webdavHash = s.getSettingOr("webdav_hash", "")
 	return s, nil
+}
+
+func (s *Service) getSettingOr(key, fallback string) string {
+	v, err := s.getSetting(key)
+	if err != nil || v == "" {
+		return fallback
+	}
+	return v
+}
+
+type WebDAVSettings struct {
+	Enabled bool   `json:"enabled"`
+	User    string `json:"user"`
+}
+
+func (s *Service) WebDAVSettings() WebDAVSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.webdavUser
+	if u == "" {
+		u = s.user
+	}
+	return WebDAVSettings{Enabled: s.webdavEnabled, User: u}
+}
+func (s *Service) HandleGetWebDAVSettings(w http.ResponseWriter, r *http.Request) {
+	httpx.JSON(w, http.StatusOK, map[string]any{"settings": s.WebDAVSettings()})
+}
+func (s *Service) HandleSaveWebDAVSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled  *bool  `json:"enabled"`
+		User     string `json:"user"`
+		Password string `json:"password"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Err(w, 400, "请求格式错误")
+		return
+	}
+	u := strings.TrimSpace(req.User)
+	if u != "" && (len(u) < 2 || len(u) > 32 || strings.ContainsAny(u, ": \t\r\n")) {
+		httpx.Err(w, 400, "用户名 2-32 字符,不能含冒号和空白")
+		return
+	}
+	s.mu.Lock()
+	if req.Enabled != nil {
+		s.webdavEnabled = *req.Enabled
+	}
+	if u != "" {
+		s.webdavUser = u
+	}
+	s.mu.Unlock()
+	if req.Password != "" {
+		if len(req.Password) < 6 {
+			httpx.Err(w, 400, "密码至少 6 位")
+			return
+		}
+		h, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			httpx.Err(w, 500, err.Error())
+			return
+		}
+		s.mu.Lock()
+		s.webdavHash = string(h)
+		s.mu.Unlock()
+	}
+	s.setSetting("webdav_enabled", fmt.Sprintf("%t", s.webdavEnabled))
+	s.setSetting("webdav_user", s.webdavUser)
+	if s.webdavHash != "" {
+		s.setSetting("webdav_hash", s.webdavHash)
+	}
+	httpx.JSON(w, 200, map[string]any{"ok": true, "settings": s.WebDAVSettings()})
 }
 
 func (s *Service) User() string {
@@ -276,7 +353,18 @@ func (s *Service) BasicAuth(next http.Handler) http.Handler {
 			return
 		}
 		user, pass, ok := r.BasicAuth()
-		if !ok || !s.Check(user, pass) {
+		s.mu.Lock()
+		enabled, davUser, davHash := s.webdavEnabled, s.webdavUser, s.webdavHash
+		s.mu.Unlock()
+		valid := enabled && ok
+		if valid {
+			if davHash != "" {
+				valid = user == davUser && bcrypt.CompareHashAndPassword([]byte(davHash), []byte(pass)) == nil
+			} else {
+				valid = s.Check(user, pass)
+			}
+		}
+		if !valid {
 			if ok {
 				s.fail(ip)
 			}

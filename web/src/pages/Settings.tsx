@@ -3,16 +3,13 @@ import { toast } from 'sonner';
 import { api } from '../api';
 import type {
     ComponentInfo,
-    DiskInfo,
-    LocalUsage,
-    MountUsage,
     Profile,
 } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
-import { Badge, Progress } from '../components/ui/progress';
+import { Badge } from '../components/ui/progress';
 import Avatar from '../components/Avatar';
 import { formatBytes, formatTime, copyText } from '../util';
 
@@ -132,10 +129,6 @@ export default function Settings({
     const [confirm, setConfirm] = useState('');
     const [saving, setSaving] = useState(false);
 
-    const [disk, setDisk] = useState<DiskInfo | null>(null);
-    const [local, setLocal] = useState<LocalUsage | null>(null);
-    const [mounts, setMounts] = useState<MountUsage[]>([]);
-
     const [comps, setComps] = useState<ComponentInfo[] | null>(null);
     const [installing, setInstalling] = useState('');
     const [updateEnabled, setUpdateEnabled] = useState<boolean | null>(null);
@@ -159,21 +152,10 @@ export default function Settings({
             .catch(() => undefined);
     }, []);
 
-    const loadStorage = useCallback(() => {
-        api.storage()
-            .then((r) => {
-                setDisk(r.disk);
-                setLocal(r.local);
-                setMounts(r.mounts ?? []);
-            })
-            .catch(() => undefined);
-    }, []);
-
     useEffect(() => {
-        loadStorage();
         loadComponents();
         api.updateStatus().then((r) => setUpdateEnabled(r.enabled)).catch(() => setUpdateEnabled(false));
-    }, [loadStorage, loadComponents]);
+    }, [loadComponents]);
 
     // 资料 + 密码一个按钮保存:改了哪部分就提交哪部分
     const save = async () => {
@@ -299,7 +281,7 @@ export default function Settings({
 
             {/* 两列各自成流:卡片高度悬殊时不会互相拉出空洞 */}
             <div className="grid md:grid-cols-2 gap-3 items-start">
-                {/* 左列:账户 */}
+                {/* 左列:账户、备份与升级 */}
                 <div className="flex flex-col gap-3">
                     <Card className="p-3">
                         <CardTitle className="mb-2">个人资料</CardTitle>
@@ -377,74 +359,6 @@ export default function Settings({
                             </Button>
                         </div>
                     </Card>
-                </div>
-
-                {/* 右列:存储与组件 */}
-                <div className="flex flex-col gap-3">
-                    <Card>
-                        <CardTitle>仓库容量</CardTitle>
-                        {disk ? (
-                            <>
-                                <div className="text-xs font-bold mb-1">本机存储</div>
-                                <Progress percent={disk.usedPercent} />
-                                <p className="text-sm text-ink-soft mt-1.5">
-                                    已用 {formatBytes(disk.used)} / 共 {formatBytes(disk.total)}
-                                    ,剩余 {formatBytes(disk.free)}
-                                </p>
-                                <div className="text-xs font-bold mb-1 mt-3">网盘目录</div>
-                                {local === null ? (
-                                    <p className="text-sm text-ink-soft">读取中…</p>
-                                ) : local.pending ? (
-                                    <p className="text-sm text-ink-soft">用量统计中…</p>
-                                ) : local.quota > 0 ? (
-                                    <>
-                                        <Progress percent={(local.bytes / local.quota) * 100} />
-                                        <p className="text-sm text-ink-soft mt-1.5">
-                                            已用 {formatBytes(local.bytes)} / 上限{' '}
-                                            {formatBytes(local.quota)}
-                                            {local.files > 0 && `,${local.files} 个文件`}
-                                            {local.bytes > local.quota && (
-                                                <span className="text-danger"> · 已超出</span>
-                                            )}
-                                        </p>
-                                    </>
-                                ) : (
-                                    <p className="text-sm text-ink-soft">
-                                        已用 {formatBytes(local.bytes)}
-                                        {local.files > 0 && `,${local.files} 个文件`}
-                                        <span className="text-xs">(未设上限)</span>
-                                    </p>
-                                )}
-                            </>
-                        ) : (
-                            <p className="text-sm text-ink-soft">读取中…</p>
-                        )}
-
-                        {/* 挂载的外部存储各自一行;用量是后台统计的缓存值 */}
-                        {mounts.map((m) => (
-                            <div key={m.name} className="mt-3 pt-3 border-t border-line/70">
-                                <div className="text-xs font-bold mb-1">@{m.name}</div>
-                                {m.pending ? (
-                                    <p className="text-sm text-ink-soft">统计中…</p>
-                                ) : m.quota > 0 ? (
-                                    <>
-                                        <Progress percent={(m.bytes / m.quota) * 100} />
-                                        <p className="text-sm text-ink-soft mt-1.5">
-                                            已用 {formatBytes(m.bytes)} / 上限{' '}
-                                            {formatBytes(m.quota)}
-                                            {m.files > 0 && `,${m.files} 个文件`}
-                                        </p>
-                                    </>
-                                ) : (
-                                    <p className="text-sm text-ink-soft">
-                                        已用 {formatBytes(m.bytes)}
-                                        {m.files > 0 && `,${m.files} 个文件`}
-                                        <span className="text-xs">(未设上限)</span>
-                                    </p>
-                                )}
-                            </div>
-                        ))}
-                    </Card>
 
                     <Card>
                         <CardTitle>备份与迁移</CardTitle>
@@ -454,43 +368,26 @@ export default function Settings({
                             外部存储(@挂载)的内容不打包,导入后按原策略自动挂上。
                         </p>
                         <div className="flex gap-2 flex-wrap">
-                            <a href={api.exportUrl()} download>
-                                <Button size="sm">导出整盘备份</Button>
-                            </a>
-                            <input
-                                ref={importInput}
-                                type="file"
-                                accept=".gz,.tgz"
-                                hidden
-                                onChange={(e) => {
-                                    const f = e.target.files?.[0];
-                                    if (f) setImportFile(f);
-                                    e.target.value = '';
-                                }}
-                            />
-                            <Button size="sm" onClick={() => importInput.current?.click()}>
-                                从备份导入…
-                            </Button>
+                            <a href={api.exportUrl()} download><Button size="sm">导出整盘备份</Button></a>
+                            <input ref={importInput} type="file" accept=".gz,.tgz" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) setImportFile(f); e.target.value = ''; }} />
+                            <Button size="sm" onClick={() => importInput.current?.click()}>从备份导入…</Button>
                         </div>
-                        <p className="text-xs text-ink-soft mt-2">
-                            备份包里含存储策略的密钥,请妥善保管
-                        </p>
+                        <p className="text-xs text-ink-soft mt-2">备份包里含存储策略的密钥,请妥善保管</p>
                     </Card>
 
                     <Card>
                         <CardTitle>PocketDrive 更新</CardTitle>
-                        <p className="text-sm text-ink-soft mb-2.5">
-                            从官方镜像拉取最新版本并重建容器。网盘文件、配置和密码保存在持久化卷中,不会被更新删除。
-                        </p>
+                        <p className="text-sm text-ink-soft mb-2.5">从官方镜像拉取最新版本并重建容器。网盘文件、配置和密码保存在持久化卷中,不会被更新删除。</p>
                         <div className="flex items-center gap-2 flex-wrap">
-                            <Button size="sm" variant="primary" disabled={updateEnabled !== true || updating} onClick={() => setUpdateOpen(true)}>
-                                {updating ? '升级中…' : '检查并升级'}
-                            </Button>
+                            <Button size="sm" variant="primary" disabled={updateEnabled !== true || updating} onClick={() => setUpdateOpen(true)}>{updating ? '升级中…' : '检查并升级'}</Button>
                             {updateEnabled === false && <span className="text-xs text-ink-soft">当前编排未启用安全更新服务,请在 1Panel 中拉取镜像并重建</span>}
                             {updateEnabled === true && <span className="text-xs text-ink-soft">升级前需要再次输入当前密码确认</span>}
                         </div>
                     </Card>
+                </div>
 
+                {/* 右列:组件与日志 */}
+                <div className="flex flex-col gap-3">
                     <Card>
                         <CardTitle>组件状态</CardTitle>
                         {comps === null ? (

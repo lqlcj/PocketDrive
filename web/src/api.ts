@@ -248,6 +248,7 @@ export interface CloudSettings {
     /** WebDAV 读 @挂载 里的文件时 302 直连存储桶,不经 VPS 中转 */
     davDirect: boolean;
 }
+export interface WebDAVSettings { enabled: boolean; user: string }
 
 export const api = {
     login: (username: string, password: string) =>
@@ -310,6 +311,9 @@ export const api = {
     cloudSettings: () => req<{ settings: CloudSettings }>('/api/v1/storages/settings'),
     saveCloudSettings: (s: Partial<CloudSettings>) =>
         post<{ ok: boolean; settings: CloudSettings }>('/api/v1/storages/settings', s),
+    webdavSettings: () => req<{ settings: WebDAVSettings }>('/api/v1/auth/webdav-settings'),
+    saveWebdavSettings: (s: { enabled?: boolean; user?: string; password?: string }) =>
+        post<{ ok: boolean; settings: WebDAVSettings }>('/api/v1/auth/webdav-settings', s),
 
     /**
      * 开始(或找回)一次分片上传。带上文件大小与修改时间,服务端就能认出
