@@ -67,14 +67,19 @@ type Status struct {
 	DownloadSpeed   string   `json:"downloadSpeed"`
 	ErrorMessage    string   `json:"errorMessage"`
 	FollowedBy      []string `json:"followedBy"`
-	Files           []struct {
-		Path string `json:"path"`
-	} `json:"files"`
+	Files           []File   `json:"files"`
 	Bittorrent *struct {
 		Info *struct {
 			Name string `json:"name"`
 		} `json:"info"`
 	} `json:"bittorrent"`
+}
+
+// File 是 aria2 报回来的任务文件;Length 是字符串(BT 文件可能超大,64 位
+// 整型经 JSON-RPC 也只会序列化成十进制字符串),用到的地方再转 int64。
+type File struct {
+	Path   string `json:"path"`
+	Length string `json:"length"`
 }
 
 func (c *Client) AddURI(uri string, opts map[string]string) (string, error) {
@@ -102,6 +107,12 @@ func (c *Client) TellStatus(gid string) (*Status, error) {
 
 func (c *Client) Pause(gid string) error   { return c.call("aria2.pause", []any{gid}, nil) }
 func (c *Client) Unpause(gid string) error { return c.call("aria2.unpause", []any{gid}, nil) }
+
+// ChangeOption 动态修改某个任务(或全局)的选项,比如 BT 的 select-file。
+// 前提是任务处于 paused 状态——正在下载的任务改 select-file 会被重启。
+func (c *Client) ChangeOption(gid string, opts map[string]string) error {
+	return c.call("aria2.changeOption", []any{gid, opts}, nil)
+}
 func (c *Client) Remove(gid string) error  { return c.call("aria2.remove", []any{gid}, nil) }
 
 func (c *Client) RemoveDownloadResult(gid string) error {

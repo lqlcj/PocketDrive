@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
+	"gorm.io/gorm"
 )
 
 const (
@@ -34,14 +35,22 @@ type Disk struct {
 type Service struct {
 	dataDir string
 	fsys    fs.FS
+	db      *gorm.DB
 
 	mu       sync.Mutex
 	cachedAt time.Time
 	recent   []RecentFile
+
+	// 本机用量(见 quota.go):遍历一次网盘目录得到,缓存 + 后台刷新
+	uMu          sync.Mutex
+	usageBytes   int64
+	usageFiles   int64
+	usageAt      time.Time
+	usageRunning bool
 }
 
-func New(dataDir string, fsys fs.FS) *Service {
-	return &Service{dataDir: dataDir, fsys: fsys}
+func New(dataDir string, fsys fs.FS, gdb *gorm.DB) *Service {
+	return &Service{dataDir: dataDir, fsys: fsys, db: gdb}
 }
 
 func (s *Service) DiskUsage() (*Disk, error) {

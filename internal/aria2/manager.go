@@ -18,6 +18,7 @@ import (
 
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/logs"
 )
 
 // Manager keeps aria2 task state mirrored in SQLite so history survives
@@ -155,7 +156,12 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	t.Status = st.Status
 	t.TotalLength = parseI64(st.TotalLength)
 	t.CompletedLength = parseI64(st.CompletedLength)
+	prevErr := t.ErrorMsg
 	t.ErrorMsg = friendlyErr(st.ErrorMessage)
+	// 同一个任务每 2 秒同步一次,只在报错第一次出现时记,别刷屏
+	if t.ErrorMsg != "" && t.ErrorMsg != prevErr {
+		logs.Errorf("aria2", "任务 %s(%s)失败: %s", t.GID, t.URL, t.ErrorMsg)
+	}
 	if name := statusName(st); name != "" {
 		t.Name = name
 	}
@@ -288,8 +294,10 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	return &t, nil
 }
 
-// AddTorrent 用上传的 .torrent 文件(base64)创建 BT 任务。
-func (m *Manager) AddTorrent(torrentB64, relDir, name string) (*db.DownloadTask, error) {
+// AddTorrent 用上传的 .torrent 文件(base64)创建 BT 任务。paused 为真时
+// 任务先挂起(不下载任何数据),等前端展示文件清单、用户勾选后再下发
+// select-file 并继续——「选完再下」的弹框流程靠这一步垫底。
+func (m *Manager) AddTorrent(torrentB64, relDir, name string, paused bool) (*db.DownloadTask, error) {
 	if err := validDownloadDir(relDir); err != nil {
 		return nil, err
 	}
@@ -301,7 +309,11 @@ func (m *Manager) AddTorrent(torrentB64, relDir, name string) (*db.DownloadTask,
 	if len(raw) == 0 || raw[0] != 'd' {
 		return nil, errors.New("不是有效的 .torrent 文件")
 	}
-	gid, err := m.c.AddTorrent(torrentB64, m.taskOpts(relDir, true))
+	opts := m.taskOpts(relDir, true)
+	if paused {
+		opts["pause"] = "true"
+	}
+	gid, err := m.c.AddTorrent(torrentB64, opts)
 	if err != nil {
 		m.degraded.Store(true)
 		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())
@@ -312,10 +324,60 @@ func (m *Manager) AddTorrent(torrentB64, relDir, name string) (*db.DownloadTask,
 		GID: gid, URL: name, Dir: relDir, Status: "active",
 		Name: strings.TrimSuffix(name, ".torrent"),
 	}
+	if paused {
+		t.Status = "paused"
+	}
 	if err := m.db.Create(&t).Error; err != nil {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// TorrentFile 是「选完再下」弹框里的一行:aria2 的 1-based 文件序号 +
+// 完整路径 + 大小。
+type TorrentFile struct {
+	Index  int    `json:"index"`
+	Path   string `json:"path"`
+	Length int64  `json:"length"`
+}
+
+// TorrentFiles 返回 BT 任务的种子名与文件清单。磁力链在元数据下载完成
+// 之前只有一条 [METADATA] 伪文件(前端据此判断「还不能选」);.torrent
+// 添加后立刻就有完整清单。
+func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
+	st, err := m.c.TellStatus(gid)
+	if err != nil {
+		return "", nil, err
+	}
+	files := make([]TorrentFile, 0, len(st.Files))
+	for i, f := range st.Files {
+		files = append(files, TorrentFile{
+			Index:  i + 1,
+			Path:   f.Path,
+			Length: parseI64(f.Length),
+		})
+	}
+	return statusName(st), files, nil
+}
+
+// SelectFiles 应用用户勾选的文件序号后开始下载。files 是 aria2 的
+// 1-based 序号;不传则下载全部。调用时任务应在 paused 状态——种子添加
+// 时就挂起,磁力则由前端在元数据就绪后先暂停再让用户勾选。
+func (m *Manager) SelectFiles(gid string, files []int) error {
+	if len(files) > 0 {
+		parts := make([]string, len(files))
+		for i, f := range files {
+			parts[i] = strconv.Itoa(f)
+		}
+		if err := m.c.ChangeOption(gid, map[string]string{"select-file": strings.Join(parts, ",")}); err != nil {
+			return err
+		}
+	}
+	if err := m.c.Unpause(gid); err != nil {
+		return err
+	}
+	m.db.Model(&db.DownloadTask{}).Where("gid = ?", gid).Update("status", "active")
+	return nil
 }
 
 type taskView struct {
@@ -366,13 +428,15 @@ func cleanRel(p string) string {
 	return strings.TrimPrefix(p, "/")
 }
 
-// HandleAddTorrent 接收 {torrent: base64, name, dir};.torrent 文件
-// 通常几十 KB,超多文件的种子也就几 MB,放宽到 16MB 上限。
+// HandleAddTorrent 接收 {torrent: base64, name, dir, paused};.torrent 文件
+// 通常几十 KB,超多文件的种子也就几 MB,放宽到 16MB 上限。paused 用于
+// 「先展示文件清单让用户勾选,再正式开始下载」的流程。
 func (m *Manager) HandleAddTorrent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Torrent string `json:"torrent"`
 		Name    string `json:"name"`
 		Dir     string `json:"dir"`
+		Paused  bool   `json:"paused"`
 	}
 	if err := httpx.DecodeN(r, &req, 16<<20); err != nil {
 		httpx.Err(w, http.StatusBadRequest, "请求格式错误(种子文件过大?)")
@@ -386,12 +450,50 @@ func (m *Manager) HandleAddTorrent(w http.ResponseWriter, r *http.Request) {
 	if name == "" || name == "." {
 		name = "upload.torrent"
 	}
-	t, err := m.AddTorrent(req.Torrent, cleanRel(req.Dir), name)
+	t, err := m.AddTorrent(req.Torrent, cleanRel(req.Dir), name, req.Paused)
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "task": t})
+}
+
+// HandleTorrentFiles 返回某个 BT 任务(种子或磁力)的文件清单,供前端
+// 弹框里打勾。gid 走 URL 路径参数,匹配 GET /api/v1/downloads/{gid}/files。
+func (m *Manager) HandleTorrentFiles(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	if gid == "" {
+		httpx.Err(w, http.StatusBadRequest, "缺少 gid")
+		return
+	}
+	name, files, err := m.TorrentFiles(gid)
+	if err != nil {
+		httpx.Err(w, http.StatusBadGateway, "获取文件列表失败: "+err.Error())
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"name": name, "files": files})
+}
+
+// HandleSelectFiles 确认弹框里勾选的文件,把 select-file 下发给 aria2
+// 并恢复下载。gid 走 URL 路径参数,匹配 POST /api/v1/downloads/{gid}/select。
+func (m *Manager) HandleSelectFiles(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	if gid == "" {
+		httpx.Err(w, http.StatusBadRequest, "缺少 gid")
+		return
+	}
+	var req struct {
+		Files []int `json:"files"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if err := m.SelectFiles(gid, req.Files); err != nil {
+		httpx.Err(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (m *Manager) gidReq(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -431,20 +533,20 @@ func (m *Manager) HandleUnpause(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// HandleRemove 删除任务;deleteFiles 为真时连已下载的文件一并删除。
 func (m *Manager) HandleRemove(w http.ResponseWriter, r *http.Request) {
-	gid, ok := m.gidReq(w, r)
-	if !ok {
+	var req struct {
+		GID         string `json:"gid"`
+		DeleteFiles bool   `json:"deleteFiles"`
+	}
+	if err := httpx.Decode(r, &req); err != nil || req.GID == "" {
+		httpx.Err(w, http.StatusBadRequest, "缺少 gid")
 		return
 	}
-	var t db.DownloadTask
-	if err := m.db.First(&t, "gid = ?", gid).Error; err != nil {
-		httpx.Err(w, http.StatusNotFound, "任务不存在")
+	deleted, err := m.RemoveTask(req.GID, req.DeleteFiles)
+	if err != nil {
+		httpx.Err(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if !isTerminal(t.Status) {
-		_ = m.c.Remove(gid) // 忽略错误:aria2 里可能已不存在
-	}
-	_ = m.c.RemoveDownloadResult(gid)
-	m.db.Delete(&db.DownloadTask{}, "gid = ?", gid)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "deletedFiles": deleted})
 }

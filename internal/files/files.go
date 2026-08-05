@@ -26,6 +26,34 @@ type Service struct {
 	tmpDir  string // 分片上传暂存目录(DB 同级,不在网盘里)
 	cloud   *cloud.Service
 	db      *gorm.DB // 分片上传会话(断点续传需要跨请求/跨重启存活)
+	space   LocalSpace
+}
+
+// LocalSpace 是本机容量检查的钩子,由 internal/storage 实现。
+//
+// 之所以用接口注入而不是直接 import:storage 要拿 files 的 fs.FS 才能
+// 构造,反过来再依赖回来就成了构造顺序上的死结。
+type LocalSpace interface {
+	// CheckLocal 在写入前判断还装不装得下;size 未知时传 0
+	CheckLocal(size int64) error
+	// AddUsage 写完就地累加,免得等下一轮全量统计
+	AddUsage(delta int64)
+}
+
+// SetLocalSpace 在 storage 构造好之后回填。没设时所有检查都放行。
+func (s *Service) SetLocalSpace(sp LocalSpace) { s.space = sp }
+
+func (s *Service) checkLocal(size int64) error {
+	if s.space == nil {
+		return nil
+	}
+	return s.space.CheckLocal(size)
+}
+
+func (s *Service) addUsage(delta int64) {
+	if s.space != nil {
+		s.space.AddUsage(delta)
+	}
 }
 
 func New(dataDir, tmpDir string, cloudSvc *cloud.Service, gdb *gorm.DB) (*Service, error) {
@@ -227,6 +255,13 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 整个请求的大小是已知的,能在动手之前就把装不下的挡回去
+	if mnt == nil && r.ContentLength > 0 {
+		if err := s.checkLocal(r.ContentLength); err != nil {
+			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+			return
+		}
+	}
 	mr, err := r.MultipartReader()
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, "需要 multipart 上传")
@@ -261,10 +296,20 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				httpx.Err(w, http.StatusBadGateway, "上传到外部存储失败: "+err.Error())
 				return
 			}
-		} else if err := s.savePart(path.Join(dir, name), part); err != nil {
-			part.Close()
-			httpx.Err(w, http.StatusInternalServerError, err.Error())
-			return
+		} else {
+			if err := s.checkLocal(0); err != nil {
+				part.Close()
+				httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+				return
+			}
+			n, err := s.savePart(path.Join(dir, name), part)
+			if err != nil {
+				part.Close()
+				httpx.ErrLog(w, r, http.StatusInternalServerError, "files",
+					"保存上传文件失败", err)
+				return
+			}
+			s.addUsage(n)
 		}
 		part.Close()
 		saved = append(saved, name)
@@ -272,16 +317,17 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "saved": saved})
 }
 
-func (s *Service) savePart(p string, part *multipart.Part) error {
+func (s *Service) savePart(p string, part *multipart.Part) (int64, error) {
 	f, err := s.root.Create(p)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if _, err := io.Copy(f, part); err != nil {
+	n, err := io.Copy(f, part)
+	if err != nil {
 		f.Close()
-		return err
+		return 0, err
 	}
-	return f.Close()
+	return n, f.Close()
 }
 
 func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
@@ -405,6 +451,10 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
+	if err := s.checkLocal(int64(len(req.Content))); err != nil {
+		httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+		return
+	}
 	if dir := path.Dir(p); dir != "." {
 		if err := s.root.MkdirAll(dir, 0o755); err != nil {
 			httpx.Err(w, http.StatusBadRequest, err.Error())
@@ -425,6 +475,7 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.addUsage(int64(len(req.Content)))
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Music, Pencil } from 'lucide-react';
+import { Music, Pencil, Play } from 'lucide-react';
 import { api } from '../api';
 import type { FileEntry } from '../api';
 import { browserPlayable, fileKind, formatBytes, officePreviewable } from '../util';
+import { usePlayer } from '../player/store';
 import { Dialog, DialogContent } from './ui/dialog';
 import { Button } from './ui/button';
 import OfficePreview from './OfficePreview';
@@ -20,6 +21,7 @@ interface Props {
 
 export default function Preview({ entries, index, dirPath, onNavigate, onClose }: Props) {
     const navigate = useNavigate();
+    const { playList } = usePlayer();
     const entry = entries[index]!;
     const path = dirPath === '' ? entry.name : `${dirPath}/${entry.name}`;
     const kind = fileKind(entry.name);
@@ -107,11 +109,23 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
             );
             break;
         case 'audio':
+            // 正常点开音乐是走不到这儿的(文件页直接交给全局播放器了),
+            // 万一从别的入口进来,也别在弹框里放——关掉弹框歌就断了
             body = (
                 <div className="text-center py-6">
                     <Music className="size-12 mx-auto mb-3 text-leaf-dark" />
-                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                    <audio src={url} controls autoPlay className="w-full" />
+                    <p className="text-sm text-ink-soft mb-4">
+                        音乐交给右下角的播放器,逛到哪儿都不会断
+                    </p>
+                    <Button
+                        variant="primary"
+                        onClick={() => {
+                            playList([{ path, name: entry.name }], 0);
+                            onClose();
+                        }}
+                    >
+                        <Play className="size-4" /> 播放
+                    </Button>
                 </div>
             );
             break;

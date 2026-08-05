@@ -14,11 +14,14 @@ import (
 
 // mockAria2 is a minimal aria2 JSON-RPC server for regression tests.
 type mockAria2 struct {
-	t        *testing.T
-	statuses map[string]*Status // gid -> status
-	added    []string           // uris received by addUri
-	dirs     []string
-	nextGID  int
+	t              *testing.T
+	statuses       map[string]*Status // gid -> status
+	added          []string           // uris received by addUri
+	dirs           []string
+	torrentPaused  []string // pause option received by addTorrent
+	lastSelect     string   // select-file passed to changeOption
+	unpaused       []string // gids passed to aria2.unpause
+	nextGID        int
 }
 
 func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +48,10 @@ func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	nextGID := func() string {
+		m.nextGID++
+		return "gid" + string(rune('0'+m.nextGID))
+	}
 	switch req.Method {
 	case "aria2.getVersion":
 		write(map[string]string{"version": "1.37.0-mock"})
@@ -55,10 +62,23 @@ func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(req.Params[2], &opts)
 		m.added = append(m.added, uris[0])
 		m.dirs = append(m.dirs, opts["dir"])
-		m.nextGID++
-		gid := "gid" + string(rune('0'+m.nextGID))
+		gid := nextGID()
 		m.statuses[gid] = &Status{GID: gid, Status: "active"}
 		write(gid)
+	case "aria2.addTorrent":
+		var opts map[string]string
+		_ = json.Unmarshal(req.Params[3], &opts)
+		m.torrentPaused = append(m.torrentPaused, opts["pause"])
+		gid := nextGID()
+		m.statuses[gid] = &Status{GID: gid, Status: "paused"}
+		write(gid)
+	case "aria2.changeOption":
+		var gid string
+		var opts map[string]string
+		_ = json.Unmarshal(req.Params[1], &gid)
+		_ = json.Unmarshal(req.Params[2], &opts)
+		m.lastSelect = opts["select-file"]
+		write("ok")
 	case "aria2.tellStatus":
 		var gid string
 		_ = json.Unmarshal(req.Params[1], &gid)
@@ -71,7 +91,12 @@ func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		write(st)
-	case "aria2.pause", "aria2.unpause", "aria2.remove", "aria2.removeDownloadResult":
+	case "aria2.pause", "aria2.remove", "aria2.removeDownloadResult":
+		write("ok")
+	case "aria2.unpause":
+		var gid string
+		_ = json.Unmarshal(req.Params[1], &gid)
+		m.unpaused = append(m.unpaused, gid)
 		write("ok")
 	default:
 		m.t.Fatalf("unexpected method %s", req.Method)
@@ -113,9 +138,7 @@ func TestAddAndSync(t *testing.T) {
 	mock.statuses[task.GID] = &Status{
 		GID: task.GID, Status: "active",
 		TotalLength: "1000", CompletedLength: "500", DownloadSpeed: "42",
-		Files: []struct {
-			Path string `json:"path"`
-		}{{Path: "/data/isos/file.iso"}},
+		Files: []File{{Path: "/data/isos/file.iso"}},
 	}
 	m.sync()
 
@@ -129,6 +152,94 @@ func TestAddAndSync(t *testing.T) {
 	}
 	if got.Name != "file.iso" {
 		t.Fatalf("name = %q, want file.iso", got.Name)
+	}
+}
+
+// 上传的 .torrent 走「选完再下」流程:paused 时 addTorrent 必须带上
+// pause=true,任务落库状态也是 paused;不要求暂停时则照常立即开始。
+func TestAddTorrentPaused(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	if _, err := m.AddTorrent("ZA==", "bt", "x.torrent", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.torrentPaused) != 1 || mock.torrentPaused[0] != "true" {
+		t.Fatalf("pause=true 没有下发给 aria2: %v", mock.torrentPaused)
+	}
+	_, tasks := m.List()
+	if tasks[0].Status != "paused" {
+		t.Fatalf("任务落库状态 = %q, want paused", tasks[0].Status)
+	}
+
+	if _, err := m.AddTorrent("ZA==", "bt", "y.torrent", false); err != nil {
+		t.Fatal(err)
+	}
+	if mock.torrentPaused[1] != "" {
+		t.Fatalf("不暂停时不该带 pause 选项: %q", mock.torrentPaused[1])
+	}
+}
+
+// 磁力链元数据就绪后,前端先暂停再勾选:select-file 下发正确、任务恢复。
+func TestSelectFiles(t *testing.T) {
+	m, mock := newTestManager(t)
+	task, err := m.AddTorrent("ZA==", "bt", "x.torrent", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.statuses[task.GID] = &Status{GID: task.GID, Status: "paused"}
+
+	if err := m.SelectFiles(task.GID, []int{1, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastSelect != "1,3" {
+		t.Fatalf("select-file = %q, want 1,3", mock.lastSelect)
+	}
+	if len(mock.unpaused) != 1 || mock.unpaused[0] != task.GID {
+		t.Fatalf("应当 unpause %q, 得到 %v", task.GID, mock.unpaused)
+	}
+
+	// 不传文件序号 = 下载全部:不发 select-file,直接恢复
+	if err := m.SelectFiles(task.GID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.unpaused) != 2 {
+		t.Fatalf("第二次也要 unpause, 得到 %v", mock.unpaused)
+	}
+}
+
+// 文件清单按 aria2 的顺序编号(1-based),种子名取 bittorrent.info.name。
+func TestTorrentFiles(t *testing.T) {
+	m, mock := newTestManager(t)
+	mock.statuses["gid1"] = &Status{
+		GID: "gid1", Status: "paused",
+		Bittorrent: &struct {
+			Info *struct {
+				Name string `json:"name"`
+			} `json:"info"`
+		}{Info: &struct {
+			Name string `json:"name"`
+		}{Name: "mytorrent"}},
+		Files: []File{
+			{Path: "/data/bt/mytorrent/a.mkv", Length: "100"},
+			{Path: "/data/bt/mytorrent/b.mp4", Length: "200"},
+		},
+	}
+
+	name, files, err := m.TorrentFiles("gid1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "mytorrent" {
+		t.Fatalf("name = %q, want mytorrent", name)
+	}
+	if len(files) != 2 {
+		t.Fatalf("want 2 files, got %d", len(files))
+	}
+	if files[0].Index != 1 || files[0].Length != 100 {
+		t.Fatalf("files[0] = %+v, want index 1 / length 100", files[0])
+	}
+	if files[1].Index != 2 || files[1].Length != 200 {
+		t.Fatalf("files[1] = %+v, want index 2 / length 200", files[1])
 	}
 }
 
@@ -252,5 +363,96 @@ func TestEnsureDirOnlyOnSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(m.localDir, "不该出现的")); !os.IsNotExist(err) {
 		t.Fatal("add 失败不该在网盘里留下空文件夹")
+	}
+}
+
+// 删任务时可以选择连文件一起删。文件清单要在 aria2 忘掉这个任务之前
+// 拿到,BT 那种「一层种子名文件夹」删空之后也要收掉。
+func TestRemoveTaskWithFiles(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	task, err := m.Add("https://example.com/file.iso", "isos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 造出 aria2 会报回来的那种绝对路径(dataRoot 是 /data)
+	sub := filepath.Join(m.localDir, "isos", "种子名")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(sub, "a.mkv")
+	for _, p := range []string{real, real + ".aria2"} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mock.statuses[task.GID] = &Status{
+		GID: task.GID, Status: "complete",
+		Files: []File{{Path: "/data/isos/种子名/a.mkv"}},
+	}
+
+	n, err := m.RemoveTask(task.GID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("应当删掉 1 个条目,得到 %d", n)
+	}
+	if _, err := os.Stat(real); !os.IsNotExist(err) {
+		t.Fatal("文件没删掉")
+	}
+	if _, err := os.Stat(real + ".aria2"); !os.IsNotExist(err) {
+		t.Fatal(".aria2 控制文件没删掉")
+	}
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Fatal("空掉的种子文件夹应当一并收掉")
+	}
+	// 任务自己的保存目录要留着,它是用户选的
+	if _, err := os.Stat(filepath.Join(m.localDir, "isos")); err != nil {
+		t.Fatalf("不该删掉任务的保存目录: %v", err)
+	}
+}
+
+// 不勾「删除文件」时只删记录
+func TestRemoveTaskKeepsFiles(t *testing.T) {
+	m, mock := newTestManager(t)
+	task, err := m.Add("https://example.com/file.iso", "isos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(m.localDir, "isos", "a.mkv")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock.statuses[task.GID] = &Status{GID: task.GID, Status: "complete",
+		Files: []File{{Path: "/data/isos/a.mkv"}}}
+
+	if _, err := m.RemoveTask(task.GID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(real); err != nil {
+		t.Fatalf("没勾删除文件时不该动文件: %v", err)
+	}
+}
+
+// aria2 报回来的路径如果跑出了网盘目录,一概不删——这是删除操作唯一的
+// 安全边界。
+func TestLocalPathRejectsEscape(t *testing.T) {
+	m, _ := newTestManager(t)
+	for _, p := range []string{
+		"/etc/passwd",
+		"/data/../etc/passwd",
+		"/datax/a.mkv",
+		"",
+	} {
+		if got, ok := m.localPath(p); ok {
+			t.Fatalf("%q 不该被接受,却翻成了 %q", p, got)
+		}
+	}
+	if _, ok := m.localPath("/data/isos/a.mkv"); !ok {
+		t.Fatal("网盘内的正常路径应当被接受")
 	}
 }

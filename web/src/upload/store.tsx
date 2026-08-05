@@ -54,6 +54,10 @@ interface UploadAPI {
     pause: (id: string) => void;
     resume: (id: string) => void;
     cancel: (id: string) => void;
+    /** 面板底部的批量操作:对所有还没结束的项生效 */
+    pauseAll: () => void;
+    resumeAll: () => void;
+    cancelAll: () => void;
     clearFinished: () => void;
     /** 有文件传完时自增,文件页据此刷新列表 */
     completedTick: number;
@@ -156,6 +160,62 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         );
     }, []);
 
+    // ---- 批量操作:面板底部那几个按钮 ----
+    // 挨个复用单项逻辑,不另写一套状态机,免得两边行为走偏。
+
+    const pauseAll = useCallback(() => {
+        setItems((list) => {
+            for (const it of list) {
+                if (it.status === 'uploading' || it.status === 'queued') {
+                    const c = ctls.current.get(it.id);
+                    if (c) c.paused = true;
+                }
+            }
+            return list.map((it) =>
+                it.status === 'uploading' || it.status === 'queued'
+                    ? { ...it, status: 'paused' as const }
+                    : it,
+            );
+        });
+    }, []);
+
+    const resumeAll = useCallback(() => {
+        setItems((list) => {
+            for (const it of list) {
+                if (it.status === 'paused' || it.status === 'error') {
+                    const c = ctls.current.get(it.id);
+                    if (c) c.paused = false;
+                    if (!queue.current.includes(it.id)) queue.current.push(it.id);
+                }
+            }
+            return list.map((it) =>
+                it.status === 'paused' || it.status === 'error'
+                    ? { ...it, status: 'queued' as const, error: undefined }
+                    : it,
+            );
+        });
+    }, []);
+
+    const cancelAll = useCallback(() => {
+        setItems((list) => {
+            for (const it of list) {
+                if (it.status === 'uploading' || it.status === 'queued' || it.status === 'paused') {
+                    const c = ctls.current.get(it.id);
+                    if (c) {
+                        c.canceled = true;
+                        c.paused = false;
+                    }
+                }
+            }
+            queue.current = [];
+            return list.map((it) =>
+                it.status === 'uploading' || it.status === 'queued' || it.status === 'paused'
+                    ? { ...it, status: 'canceled' as const }
+                    : it,
+            );
+        });
+    }, []);
+
     // ---- 上传 worker:一次只传一个文件,小内存 VPS 上更稳 ----
     useEffect(() => {
         if (running.current) return;
@@ -252,8 +312,30 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     }, [items]);
 
     const value = useMemo(
-        () => ({ items, add, pause, resume, cancel, clearFinished, completedTick }),
-        [items, add, pause, resume, cancel, clearFinished, completedTick],
+        () => ({
+            items,
+            add,
+            pause,
+            resume,
+            cancel,
+            pauseAll,
+            resumeAll,
+            cancelAll,
+            clearFinished,
+            completedTick,
+        }),
+        [
+            items,
+            add,
+            pause,
+            resume,
+            cancel,
+            pauseAll,
+            resumeAll,
+            cancelAll,
+            clearFinished,
+            completedTick,
+        ],
     );
     return <UploadCtx.Provider value={value}>{children}</UploadCtx.Provider>;
 }

@@ -12,9 +12,13 @@ import { api } from '../api';
 import type { DownloadTask } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
+import { Input, Checkbox } from '../components/ui/input';
+import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import { Progress, Badge } from '../components/ui/progress';
 import FolderPicker from '../components/FolderPicker';
+import DownloadFileSelect, {
+    type PendingSelect,
+} from '../components/DownloadFileSelect';
 import { formatBytes, formatSpeed, formatTime } from '../util';
 
 const STATUS: Record<string, { text: string; tone: 'green' | 'blue' | 'orange' | 'red' | 'default' }> = {
@@ -45,6 +49,12 @@ export default function Downloads() {
     const [degraded, setDegraded] = useState(false);
     const [adding, setAdding] = useState(false);
     const torrentInput = useRef<HTMLInputElement>(null);
+    // 删除确认:BT 下完往往是一整个文件夹,删记录还是连文件一起删得问清楚
+    const [removeTarget, setRemoveTarget] = useState<DownloadTask | null>(null);
+    const [removeFiles, setRemoveFiles] = useState(false);
+    // 「选完再下」:上传的种子 / 磁力先挂起,弹框勾选文件后确认才开始
+    const [selectQueue, setSelectQueue] = useState<PendingSelect[]>([]);
+    const [selectBusy, setSelectBusy] = useState(false);
 
     const load = useCallback(() => {
         api.downloads()
@@ -66,12 +76,18 @@ export default function Downloads() {
     }, [load]);
 
     const add = async () => {
-        if (!url.trim()) return;
+        const u = url.trim();
+        if (!u) return;
         setAdding(true);
         try {
-            await api.addDownload(url.trim(), dir);
-            toast.success('任务已添加');
+            const r = await api.addDownload(u, dir);
             setUrl('');
+            if (u.startsWith('magnet:')) {
+                // 磁力:任务已进 aria2 拉元数据,弹框等清单出来再让用户勾选
+                setSelectQueue((q) => [...q, { gid: r.task.gid, magnet: true }]);
+            } else {
+                toast.success('任务已添加');
+            }
             load();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '添加失败');
@@ -83,6 +99,7 @@ export default function Downloads() {
     const addTorrents = async (files: FileList | null) => {
         if (!files || files.length === 0) return;
         setAdding(true);
+        const queue: PendingSelect[] = [];
         try {
             for (const f of Array.from(files)) {
                 if (f.size > 12 * 1024 * 1024) {
@@ -90,15 +107,71 @@ export default function Downloads() {
                     continue;
                 }
                 const b64 = await fileToBase64(f);
-                await api.addTorrent(b64, f.name, dir);
-                toast.success(`种子「${f.name}」已开始下载`);
+                // 先挂起,弹框里勾选完再真正开始下载
+                const r = await api.addTorrent(b64, f.name, dir, true);
+                queue.push({ gid: r.task.gid, magnet: false });
             }
+            if (queue.length > 0) setSelectQueue((q) => [...q, ...queue]);
             load();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '种子任务添加失败');
         } finally {
             setAdding(false);
             if (torrentInput.current) torrentInput.current.value = '';
+        }
+    };
+
+    const confirmSelect = async (indexes: number[]) => {
+        const cur = selectQueue[0];
+        if (!cur || selectBusy) return;
+        setSelectBusy(true);
+        try {
+            await api.selectDownloadFiles(cur.gid, indexes);
+            toast.success(
+                indexes.length === 0 ? '任务已开始下载' : `已按所选 ${indexes.length} 个文件开始下载`,
+            );
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '操作失败');
+        } finally {
+            setSelectBusy(false);
+            setSelectQueue((q) => q.slice(1));
+            load();
+        }
+    };
+
+    const cancelSelect = async () => {
+        const cur = selectQueue[0];
+        if (!cur || selectBusy) return;
+        setSelectBusy(true);
+        try {
+            await api.removeDownload(cur.gid, false);
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '移除失败');
+        } finally {
+            setSelectBusy(false);
+            setSelectQueue((q) => q.slice(1));
+            load();
+        }
+    };
+
+    const doRemove = async () => {
+        if (!removeTarget) return;
+        const withFiles = removeFiles;
+        try {
+            const r = await api.removeDownload(removeTarget.gid, withFiles);
+            toast.success(
+                withFiles
+                    ? r.deletedFiles > 0
+                        ? `任务和 ${r.deletedFiles} 个文件已删除`
+                        : '任务已删除(没有找到已下载的文件)'
+                    : '任务记录已删除',
+            );
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '删除失败');
+        } finally {
+            setRemoveTarget(null);
+            setRemoveFiles(false);
+            load();
         }
     };
 
@@ -155,7 +228,8 @@ export default function Downloads() {
                     </Button>
                 </div>
                 <p className="text-xs text-ink-soft">
-                    支持直链 / 磁力,也可以直接上传 .torrent 种子文件(可多选)
+                    支持直链 / 磁力,也可以直接上传 .torrent 种子文件(可多选)。
+                    种子和磁力会先弹框勾选要下载的文件,确认后才开始。
                 </p>
             </Card>
 
@@ -245,7 +319,10 @@ export default function Downloads() {
                                     <Button
                                         variant="ghost-danger"
                                         size="sm"
-                                        onClick={() => op(() => api.removeDownload(t.gid))}
+                                        onClick={() => {
+                                            setRemoveTarget(t);
+                                            setRemoveFiles(false);
+                                        }}
                                     >
                                         删除任务
                                     </Button>
@@ -255,6 +332,66 @@ export default function Downloads() {
                     })}
                 </div>
             )}
+
+            {/* 选完再下:种子/磁力的文件勾选弹框 */}
+            {selectQueue.length > 0 && (
+                <Dialog
+                    open
+                    onOpenChange={(o) => {
+                        if (!o && !selectBusy) void cancelSelect();
+                    }}
+                >
+                    <DialogContent title="选择要下载的文件" wide>
+                        <DownloadFileSelect
+                            item={selectQueue[0]!}
+                            busy={selectBusy}
+                            onConfirm={(indexes) => void confirmSelect(indexes)}
+                            onCancel={() => void cancelSelect()}
+                        />
+                    </DialogContent>
+                </Dialog>
+            )}
+
+            {/* 删除任务:默认只删记录,勾上才动网盘里的文件 */}
+            <Dialog
+                open={removeTarget !== null}
+                onOpenChange={(o) => {
+                    if (!o) {
+                        setRemoveTarget(null);
+                        setRemoveFiles(false);
+                    }
+                }}
+            >
+                <DialogContent title="删除任务">
+                    <div className="flex flex-col gap-3">
+                        <p className="text-sm">
+                            删除「{removeTarget?.name || removeTarget?.url}」这条任务记录。
+                        </p>
+                        <Checkbox
+                            label="同时删除已下载的文件"
+                            checked={removeFiles}
+                            onChange={(e) => setRemoveFiles(e.target.checked)}
+                        />
+                        <p className="text-xs text-ink-soft leading-relaxed">
+                            {removeFiles ? (
+                                <>
+                                    保存在「{removeTarget?.dir || '根目录'}
+                                    」里的文件会<b>直接删除,不进回收站</b>。
+                                    BT 任务连同种子自己建的那层文件夹一起清掉,
+                                    没下完的分片文件也会删。
+                                </>
+                            ) : (
+                                <>只删这条记录,已经下好的文件留在网盘里。</>
+                            )}
+                        </p>
+                    </div>
+                    <DialogFooter
+                        okText={removeFiles ? '删除任务和文件' : '删除记录'}
+                        okDanger
+                        onOk={doRemove}
+                    />
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

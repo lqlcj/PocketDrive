@@ -51,6 +51,13 @@ export interface DownloadTask {
     speed: number;
 }
 
+/** BT 任务的文件清单里的一行(index 是 aria2 的 1-based 文件序号) */
+export interface TorrentFile {
+    index: number;
+    path: string;
+    length: number;
+}
+
 export interface YtdlpOptions {
     embedMeta?: boolean;
     embedThumb?: boolean;
@@ -182,6 +189,16 @@ export interface MountUsage {
     pending: boolean;
 }
 
+/** 本机网盘目录的用量与容量上限(与外部存储同一套语义) */
+export interface LocalUsage {
+    bytes: number;
+    files: number;
+    /** 容量上限(字节),0 = 不限 */
+    quota: number;
+    /** 用量还在后台统计中 */
+    pending: boolean;
+}
+
 export interface RecentFile {
     path: string;
     name: string;
@@ -218,6 +235,11 @@ export interface StoragePolicyInput {
     basePath: string;
     /** 容量上限(GB),0 或留空 = 不限 */
     quotaGB?: number;
+}
+
+export interface CloudSettings {
+    /** WebDAV 读 @挂载 里的文件时 302 直连存储桶,不经 VPS 中转 */
+    davDirect: boolean;
 }
 
 export const api = {
@@ -278,6 +300,9 @@ export const api = {
     deleteStorage: (id: number) => post<{ ok: boolean }>('/api/v1/storages/delete', { id }),
     testStorage: (p: Partial<StoragePolicyInput>) =>
         post<{ ok: boolean }>('/api/v1/storages/test', p),
+    cloudSettings: () => req<{ settings: CloudSettings }>('/api/v1/storages/settings'),
+    saveCloudSettings: (s: Partial<CloudSettings>) =>
+        post<{ ok: boolean; settings: CloudSettings }>('/api/v1/storages/settings', s),
 
     /**
      * 开始(或找回)一次分片上传。带上文件大小与修改时间,服务端就能认出
@@ -313,14 +338,25 @@ export const api = {
         post<{ ok: boolean; count: number }>('/api/v1/downloads/trackers/update', {}),
 
     storage: () =>
-        req<{ disk: DiskInfo; recent: RecentFile[] | null; mounts: MountUsage[] | null }>(
-            '/api/v1/storage',
-        ),
+        req<{
+            disk: DiskInfo;
+            recent: RecentFile[] | null;
+            mounts: MountUsage[] | null;
+            local: LocalUsage;
+        }>('/api/v1/storage'),
+    /** 本机容量上限(GB),0 或留空 = 不限 */
+    saveLocalQuota: (quotaGB: number) =>
+        post<{ ok: boolean; quota: number }>('/api/v1/storage/quota', { quotaGB }),
 
     components: () =>
-        req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),
-    installComponent: (kind: string) =>
+        req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),    installComponent: (kind: string) =>
         post<{ ok: boolean; version: string }>('/api/v1/components/install', { kind }),
+
+    /** 错误日志:只记 error,每天清空 */
+    logs: () =>
+        req<{ enabled: boolean; text: string; size: number }>('/api/v1/logs'),
+    clearLogs: () => post<{ ok: boolean }>('/api/v1/logs/clear', {}),
+    logsDownloadUrl: () => '/api/v1/logs/download',
 
     avatarUrl: (version: string) =>
         `/api/v1/public/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`,
@@ -358,14 +394,30 @@ export const api = {
     downloads: () =>
         req<{ degraded: boolean; tasks: DownloadTask[] }>('/api/v1/downloads'),
     addDownload: (url: string, dir: string) =>
-        post<{ ok: boolean }>('/api/v1/downloads', { url, dir }),
-    addTorrent: (torrent: string, name: string, dir: string) =>
-        post<{ ok: boolean }>('/api/v1/downloads/torrent', { torrent, name, dir }),
+        post<{ ok: boolean; task: DownloadTask }>('/api/v1/downloads', { url, dir }),
+    /** paused 为真时任务先挂起,等用户在弹框里勾选文件后再继续 */
+    addTorrent: (torrent: string, name: string, dir: string, paused = false) =>
+        post<{ ok: boolean; task: DownloadTask }>('/api/v1/downloads/torrent', {
+            torrent,
+            name,
+            dir,
+            paused,
+        }),
+    /** 某个 BT 任务(种子/磁力)的文件清单,供弹框里打勾 */
+    downloadFiles: (gid: string) =>
+        req<{ name: string; files: TorrentFile[] }>(`/api/v1/downloads/${gid}/files`),
+    /** 确认弹框勾选的文件并开始下载;files 为空 = 下载全部 */
+    selectDownloadFiles: (gid: string, files: number[]) =>
+        post<{ ok: boolean }>(`/api/v1/downloads/${gid}/select`, { files }),
     pauseDownload: (gid: string) => post<{ ok: boolean }>('/api/v1/downloads/pause', { gid }),
     unpauseDownload: (gid: string) =>
         post<{ ok: boolean }>('/api/v1/downloads/unpause', { gid }),
-    removeDownload: (gid: string) =>
-        post<{ ok: boolean }>('/api/v1/downloads/remove', { gid }),
+    /** deleteFiles 为真时连已下载的文件一起删 */
+    removeDownload: (gid: string, deleteFiles = false) =>
+        post<{ ok: boolean; deletedFiles: number }>('/api/v1/downloads/remove', {
+            gid,
+            deleteFiles,
+        }),
 
     ytdlp: () =>
         req<{ available: boolean; version: string; tasks: YtdlpTask[] }>('/api/v1/ytdlp'),

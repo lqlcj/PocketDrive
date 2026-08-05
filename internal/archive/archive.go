@@ -24,6 +24,7 @@ import (
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/logs"
 )
 
 const (
@@ -69,6 +70,7 @@ func (s *Service) finish(t *db.ArchiveTask, err error) {
 	upd := map[string]any{"updated_at": time.Now()}
 	if err != nil {
 		upd["status"], upd["error_msg"] = "error", err.Error()
+		logs.Errorf("archive", "任务 #%d(%s %s)失败: %v", t.ID, t.Kind, t.Src, err)
 	} else {
 		upd["status"], upd["done"] = "done", t.Total
 	}

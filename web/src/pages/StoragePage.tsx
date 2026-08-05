@@ -4,11 +4,11 @@ import { ArrowLeft, Cloud, HardDrive, Plug, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import { formatBytes } from '../util';
-import type { StoragePolicy, StoragePolicyInput } from '../api';
+import type { LocalUsage, StoragePolicy, StoragePolicyInput } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Badge } from '../components/ui/progress';
+import { Badge, Progress } from '../components/ui/progress';
 import { Dialog, DialogContent } from '../components/ui/dialog';
 
 const EMPTY: StoragePolicyInput = {
@@ -37,11 +37,24 @@ export default function StoragePage() {
     const [saving, setSaving] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<StoragePolicy | null>(null);
 
+    // 本机存储的用量与上限(和 /api/v1/storage 同一份数据)
+    const [local, setLocal] = useState<LocalUsage | null>(null);
+    const [quotaGB, setQuotaGB] = useState('');
+    const [savingQuota, setSavingQuota] = useState(false);
+
     const load = useCallback(() => {
         api.storages()
             .then((r) => setPolicies(r.policies))
             .catch((e) => toast.error(e instanceof Error ? e.message : '加载失败'))
             .finally(() => setLoading(false));
+        api.storage()
+            .then((r) => {
+                setLocal(r.local);
+                if (r.local.quota > 0) {
+                    setQuotaGB(String(Math.round((r.local.quota / 1024 ** 3) * 10) / 10));
+                }
+            })
+            .catch(() => undefined);
     }, []);
 
     useEffect(load, [load]);
@@ -105,6 +118,25 @@ export default function StoragePage() {
         }
     };
 
+    const saveQuota = async () => {
+        const gb = quotaGB.trim() === '' ? 0 : Number(quotaGB);
+        if (Number.isNaN(gb) || gb < 0) {
+            toast.warning('容量上限需为不小于 0 的数字');
+            return;
+        }
+        setSavingQuota(true);
+        try {
+            const r = await api.saveLocalQuota(gb);
+            setLocal((prev) => (prev ? { ...prev, quota: r.quota } : prev));
+            setQuotaGB(gb === 0 ? '' : String(gb));
+            toast.success(gb > 0 ? `已设置本机容量上限 ${gb} GB` : '已取消本机容量上限');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '保存失败');
+        } finally {
+            setSavingQuota(false);
+        }
+    };
+
     const field = (
         label: string,
         key: keyof StoragePolicyInput,
@@ -149,6 +181,60 @@ export default function StoragePage() {
                         </div>
                     </div>
                     <Badge tone="green">始终启用</Badge>
+                </div>
+
+                <div className="border-t border-line/70 mt-3 pt-3">
+                    {local === null ? (
+                        <p className="text-sm text-ink-soft">读取中…</p>
+                    ) : local.pending ? (
+                        <p className="text-sm text-ink-soft">用量统计中…</p>
+                    ) : local.quota > 0 ? (
+                        <>
+                            <Progress percent={(local.bytes / local.quota) * 100} />
+                            <p className="text-sm text-ink-soft mt-1.5">
+                                已用 {formatBytes(local.bytes)} / 上限{' '}
+                                {formatBytes(local.quota)}
+                                {local.files > 0 && `,${local.files} 个文件`}
+                                {local.bytes > local.quota && (
+                                    <span className="text-danger"> · 已超出</span>
+                                )}
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-sm text-ink-soft">
+                            已用 {formatBytes(local.bytes)}
+                            {local.files > 0 && `,${local.files} 个文件`}
+                            <span className="text-xs">(未设上限)</span>
+                        </p>
+                    )}
+
+                    <div className="flex items-end gap-2 mt-2.5 flex-wrap">
+                        <div className="flex-1 min-w-40">
+                            <label className="block text-xs font-bold text-ink-soft mb-1">
+                                容量上限(GB,0 或留空表示不限)
+                            </label>
+                            <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={quotaGB}
+                                placeholder="例如 100"
+                                onChange={(e) => setQuotaGB(e.target.value)}
+                            />
+                        </div>
+                        <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={savingQuota}
+                            onClick={saveQuota}
+                        >
+                            {savingQuota ? '保存中…' : '保存'}
+                        </Button>
+                    </div>
+                    <p className="text-xs text-ink-soft mt-1 leading-relaxed">
+                        和 S3 挂载一样是软限制:用量靠定期统计,刚传上去的文件可能要过一会
+                        才算进来;满了之后再传会在上传时就提示,不会让你传一半才报错
+                    </p>
                 </div>
             </Card>
 

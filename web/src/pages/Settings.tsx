@@ -4,20 +4,115 @@ import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { ComponentInfo, DiskInfo, MountUsage, Profile, RecentFile } from '../api';
+import type {
+    ComponentInfo,
+    DiskInfo,
+    LocalUsage,
+    MountUsage,
+    Profile,
+    RecentFile,
+} from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
+import { Input, Checkbox } from '../components/ui/input';
 import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import { Badge, Progress } from '../components/ui/progress';
 import KindIcon from '../components/KindIcon';
 import Avatar from '../components/Avatar';
 import { fileKind, formatBytes, formatTime, copyText } from '../util';
 
-// 一键安装脚本把站点装在 /opt/pocketdrive;自己 compose 部署的用户
-// 换成自己的目录即可。命令写在前端而不是后端拼:后端并不知道用户把
-// compose 文件放在哪,写死一个路径更可能是错的。
-const UPGRADE_CMD = 'cd /opt/pocketdrive && docker compose pull && docker compose up -d';
+// compose 文件在服务器上的哪个目录,容器里是看不出来的(compose 只把
+// 工作目录写进容器 label,进程自己读不到),所以让用户自己填、记在
+// localStorage 里。默认是一键安装脚本用的路径。
+const DEFAULT_COMPOSE_DIR = '/opt/pocketdrive';
+// 1Panel 装的编排在这个目录下,按编排名分子目录——这是最常见的第二种情况
+const ONEPANEL_COMPOSE_DIR = '/opt/1panel/docker/compose/pocketdrive';
+const upgradeCmd = (dir: string) =>
+    `cd ${dir || DEFAULT_COMPOSE_DIR} && docker compose pull && docker compose up -d`;
+
+/**
+ * 错误日志卡片。
+ *
+ * 只记 error、每天清空——所以这里看到的永远是「今天出过什么问题」。
+ * 出了毛病但现场已经过去时,这是唯一还能翻的东西;不想 ssh 上服务器
+ * 看 docker logs 的时候也用它。
+ */
+function ErrorLogCard() {
+    const [text, setText] = useState('');
+    const [size, setSize] = useState(0);
+    const [enabled, setEnabled] = useState(true);
+    const [open, setOpen] = useState(false);
+    const [loading, setLoading] = useState(false);
+
+    const load = useCallback(() => {
+        setLoading(true);
+        api.logs()
+            .then((r) => {
+                setText(r.text);
+                setSize(r.size);
+                setEnabled(r.enabled);
+            })
+            .catch(() => undefined)
+            .finally(() => setLoading(false));
+    }, []);
+
+    useEffect(() => {
+        if (open) load();
+    }, [open, load]);
+
+    const clear = async () => {
+        try {
+            await api.clearLogs();
+            setText('');
+            setSize(0);
+            toast.success('日志已清空');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '清空失败');
+        }
+    };
+
+    return (
+        <Card>
+            <CardTitle>错误日志</CardTitle>
+            <p className="text-xs text-ink-soft leading-relaxed mb-2">
+                只记录出错的事(上传失败、下载任务报错、服务器内部错误等),每天零点自动清空。
+                遇到问题又不方便上服务器时,把这里的内容贴出来就能查。
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+                <Button size="sm" onClick={() => setOpen((v) => !v)}>
+                    {open ? '收起' : '查看今天的日志'}
+                </Button>
+                {open && (
+                    <>
+                        <Button size="sm" variant="ghost" onClick={load} disabled={loading}>
+                            刷新
+                        </Button>
+                        <a href={api.logsDownloadUrl()} download>
+                            <Button size="sm" variant="ghost">
+                                下载
+                            </Button>
+                        </a>
+                        <Button size="sm" variant="ghost-danger" onClick={clear}>
+                            清空
+                        </Button>
+                        <span className="text-xs text-ink-soft ml-auto">
+                            {formatBytes(size)}
+                        </span>
+                    </>
+                )}
+            </div>
+            {open && (
+                <pre className="mt-2 max-h-72 overflow-auto bg-paper-2 rounded-xl p-2.5 text-[11px] whitespace-pre-wrap break-all">
+                    {!enabled
+                        ? '当前以本机开发方式运行,错误只写在控制台,没有落盘'
+                        : loading && text === ''
+                          ? '读取中…'
+                          : text || '今天没有出错记录'}
+                </pre>
+            )}
+        </Card>
+    );
+}
 
 export default function Settings({
     profile,
@@ -28,17 +123,30 @@ export default function Settings({
 }) {
     const [username, setUsername] = useState(profile.user);
 
+    // compose 目录记在浏览器里就够了:它只用来拼一条给用户复制的命令
+    const [composeDir, setComposeDir] = useState(
+        () => localStorage.getItem('pd_compose_dir') ?? DEFAULT_COMPOSE_DIR,
+    );
+    const saveComposeDir = (v: string) => {
+        setComposeDir(v);
+        localStorage.setItem('pd_compose_dir', v);
+    };
+
     const [oldPass, setOldPass] = useState('');
     const [newPass, setNewPass] = useState('');
     const [confirm, setConfirm] = useState('');
     const [saving, setSaving] = useState(false);
 
     const [disk, setDisk] = useState<DiskInfo | null>(null);
+    const [local, setLocal] = useState<LocalUsage | null>(null);
     const [recent, setRecent] = useState<RecentFile[]>([]);
     const [mounts, setMounts] = useState<MountUsage[]>([]);
 
     const [comps, setComps] = useState<ComponentInfo[] | null>(null);
     const [installing, setInstalling] = useState('');
+
+    // WebDAV 读外部存储是否直连存储桶(null = 还没读到)
+    const [davDirect, setDavDirect] = useState<boolean | null>(null);
 
     // 头像:上传图片存在配置目录,不进网盘
     const avatarInput = useRef<HTMLInputElement>(null);
@@ -60,6 +168,7 @@ export default function Settings({
         api.storage()
             .then((r) => {
                 setDisk(r.disk);
+                setLocal(r.local);
                 setRecent(r.recent ?? []);
                 setMounts(r.mounts ?? []);
             })
@@ -70,6 +179,28 @@ export default function Settings({
         loadStorage();
         loadComponents();
     }, [loadStorage, loadComponents]);
+
+    useEffect(() => {
+        api.cloudSettings()
+            .then((r) => setDavDirect(r.settings.davDirect))
+            .catch(() => undefined);
+    }, []);
+
+    // 直连开关立即生效,不跟"保存资料"那个按钮混在一起;失败就回滚复选框
+    const toggleDavDirect = async (on: boolean) => {
+        const prev = davDirect;
+        setDavDirect(on);
+        try {
+            const r = await api.saveCloudSettings({ davDirect: on });
+            setDavDirect(r.settings.davDirect);
+            toast.success(
+                on ? '已开启:播放器将直连存储桶' : '已关闭:改由本站中转',
+            );
+        } catch (e) {
+            setDavDirect(prev);
+            toast.error(e instanceof Error ? e.message : '保存失败');
+        }
+    };
 
     // 资料 + 密码一个按钮保存:改了哪部分就提交哪部分
     const save = async () => {
@@ -155,7 +286,7 @@ export default function Settings({
     };
 
     const copyUpgradeCmd = async () => {
-        if (await copyText(UPGRADE_CMD)) toast.success('命令已复制');
+        if (await copyText(upgradeCmd(composeDir))) toast.success('命令已复制');
         else toast.warning('复制失败,请手动选中');
     };
 
@@ -321,6 +452,30 @@ export default function Settings({
                                     已用 {formatBytes(disk.used)} / 共 {formatBytes(disk.total)}
                                     ,剩余 {formatBytes(disk.free)}
                                 </p>
+                                <div className="text-xs font-bold mb-1 mt-3">网盘目录</div>
+                                {local === null ? (
+                                    <p className="text-sm text-ink-soft">读取中…</p>
+                                ) : local.pending ? (
+                                    <p className="text-sm text-ink-soft">用量统计中…</p>
+                                ) : local.quota > 0 ? (
+                                    <>
+                                        <Progress percent={(local.bytes / local.quota) * 100} />
+                                        <p className="text-sm text-ink-soft mt-1.5">
+                                            已用 {formatBytes(local.bytes)} / 上限{' '}
+                                            {formatBytes(local.quota)}
+                                            {local.files > 0 && `,${local.files} 个文件`}
+                                            {local.bytes > local.quota && (
+                                                <span className="text-danger"> · 已超出</span>
+                                            )}
+                                        </p>
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-ink-soft">
+                                        已用 {formatBytes(local.bytes)}
+                                        {local.files > 0 && `,${local.files} 个文件`}
+                                        <span className="text-xs">(未设上限)</span>
+                                    </p>
+                                )}
                             </>
                         ) : (
                             <p className="text-sm text-ink-soft">读取中…</p>
@@ -376,6 +531,20 @@ export default function Settings({
                         {kv('地址', <code className="bg-paper-2 rounded px-2 py-0.5 break-all">{davURL}</code>)}
                         {kv('用户名', <code className="bg-paper-2 rounded px-2 py-0.5">{profile.user}</code>)}
                         {kv('密码', <span className="text-sm">与网页登录密码相同</span>)}
+                        {davDirect !== null && (
+                            <div className="border-t border-line mt-2.5 pt-2.5">
+                                <Checkbox
+                                    label="外部存储直连(不经本站中转)"
+                                    checked={davDirect}
+                                    onChange={(e) => toggleDavDirect(e.target.checked)}
+                                />
+                                <p className="text-xs text-ink-soft mt-1.5">
+                                    开启后,播放 @挂载 里的文件由播放器直接连存储桶,
+                                    不占本机流量(网页端一直是这样)。极少数客户端不认
+                                    重定向(如 Windows 资源管理器),播不了就关掉。
+                                </p>
+                            </div>
+                        )}
                     </Card>
 
                     <Card>
@@ -488,7 +657,7 @@ export default function Settings({
                                         </p>
                                         <div className="flex items-center gap-2">
                                             <code className="flex-1 min-w-0 bg-paper-2 rounded-lg px-2.5 py-1.5 text-xs break-all">
-                                                {UPGRADE_CMD}
+                                                {upgradeCmd(composeDir)}
                                             </code>
                                             <Button
                                                 size="sm"
@@ -498,6 +667,40 @@ export default function Settings({
                                                 复制
                                             </Button>
                                         </div>
+                                        {/* compose 目录因部署方式而异,容器里探测不到,让用户自己指一次 */}
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-xs text-ink-soft shrink-0">
+                                                compose 目录
+                                            </span>
+                                            <Input
+                                                className="flex-1 min-w-40"
+                                                value={composeDir}
+                                                placeholder={DEFAULT_COMPOSE_DIR}
+                                                onChange={(e) => saveComposeDir(e.target.value)}
+                                            />
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => saveComposeDir(DEFAULT_COMPOSE_DIR)}
+                                            >
+                                                一键脚本
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => saveComposeDir(ONEPANEL_COMPOSE_DIR)}
+                                            >
+                                                1Panel
+                                            </Button>
+                                        </div>
+                                        <p className="text-xs text-ink-soft leading-relaxed">
+                                            一键脚本装的在 <code>/opt/pocketdrive</code>;1Panel
+                                            编排装的在 <code>/opt/1panel/docker/compose/编排名</code>
+                                            (用 1Panel 的话,直接在「容器 → 编排」里点「拉取镜像并重建」
+                                            更省事,不用敲命令)。找不到就跑一句{' '}
+                                            <code>docker inspect pocketdrive --format '{'{{'}
+                                            index .Config.Labels "com.docker.compose.project.working_dir"{'}}'}'</code>
+                                        </p>
                                     </div>
                                 ) : (
                                     <p className="text-xs text-ink-soft leading-relaxed">
@@ -508,6 +711,8 @@ export default function Settings({
                             </div>
                         )}
                     </Card>
+
+                    <ErrorLogCard />
                 </div>
             </div>
 

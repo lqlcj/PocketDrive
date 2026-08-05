@@ -115,10 +115,11 @@ func (s *Service) Invalidate() {
 
 func (s *Service) Search(q string, limit int) []Item {
 	q = strings.ToLower(strings.TrimSpace(q))
+	// 必须是非 nil 切片:nil 编出来的 JSON 是 null,前端拿 null 读 .length 会整页崩掉
+	out := []Item{}
 	if q == "" {
-		return nil
+		return out
 	}
-	var out []Item
 	for _, it := range s.snapshot() {
 		if strings.Contains(strings.ToLower(it.Name), q) {
 			out = append(out, it)
@@ -131,7 +132,7 @@ func (s *Service) Search(q string, limit int) []Item {
 }
 
 func (s *Service) Category(kind string, limit int) []Item {
-	var out []Item
+	out := []Item{}
 	for _, it := range s.snapshot() {
 		if !it.Dir && it.Kind == kind {
 			out = append(out, it)

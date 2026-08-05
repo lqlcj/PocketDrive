@@ -21,6 +21,7 @@ import (
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/icons"
 	"pocketdrive/internal/index"
+	"pocketdrive/internal/logs"
 	"pocketdrive/internal/server"
 	"pocketdrive/internal/share"
 	"pocketdrive/internal/storage"
@@ -34,6 +35,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+
+	// 错误日志和 DB 放一起(容器里就是 /config 卷),重启不丢。
+	// 只记 error、每天清空,详见 internal/logs。
+	logs.Init(filepath.Join(filepath.Dir(cfg.DBPath), "logs"))
 
 	// 导入进来的配置库在这里顶替正式库——必须赶在 db.Open 之前
 	if err := archive.RestorePendingImport(cfg.DBPath); err != nil {
@@ -64,7 +69,9 @@ func main() {
 	}
 	fileSvc.StartCleanup()
 
-	storageSvc := storage.New(cfg.DataDir, fileSvc.Root().FS())
+	storageSvc := storage.New(cfg.DataDir, fileSvc.Root().FS(), gdb)
+	// 本机容量检查的回调(storage 依赖 files 的 FS 构造,反过来再由这里回填)
+	fileSvc.SetLocalSpace(storageSvc)
 
 	aria2Mgr := aria2.NewManager(gdb,
 		aria2.NewClient(cfg.Aria2RPC, cfg.Aria2Secret), cfg.Aria2DataDir, cfg.DataDir)

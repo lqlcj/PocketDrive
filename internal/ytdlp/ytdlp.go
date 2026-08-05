@@ -26,6 +26,7 @@ import (
 
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/logs"
 )
 
 const logTailLines = 40
@@ -138,15 +139,21 @@ type Options struct {
 	Playlist bool `json:"playlist"`
 }
 
-// presets 是服务端固定白名单:用户只能选 key,参数模板不可注入
+// presets 是服务端固定白名单:用户只能选 key,参数模板不可注入。
+// 每个格式串都带多级回退:先要 mp4/m4a 的分离流(画质最好),
+// 拿不到就退回任意容器分离流(bv*+ba,靠 --merge-output-format 收成 mp4),
+// 再退到合成格式(b)。tv 等受限客户端返回的格式表较小,没这层兜底会
+// 报 "Requested format is not available"。
 var presets = map[string][]string{
-	"video_best": {"-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b", "--merge-output-format", "mp4"},
-	"video_1080": {"-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/b[height<=1080]/b", "--merge-output-format", "mp4"},
-	"video_720":  {"-f", "bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/b[height<=720]/b", "--merge-output-format", "mp4"},
-	"video_480":  {"-f", "bv*[ext=mp4][height<=480]+ba[ext=m4a]/b[ext=mp4][height<=480]/b[height<=480]/b", "--merge-output-format", "mp4"},
-	// 音频:多数站点音轨本就是 m4a,仅 remux;mp3 需转码但音频转码很快
-	"audio_m4a": {"-f", "bestaudio", "-x", "--audio-format", "m4a"},
-	"audio_mp3": {"-f", "bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "0"},
+	"video_best": {"-f", "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b", "--merge-output-format", "mp4"},
+	"video_1080": {"-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/bv*[height<=1080]+ba/b[ext=mp4][height<=1080]/b[height<=1080]/b", "--merge-output-format", "mp4"},
+	"video_720":  {"-f", "bv*[ext=mp4][height<=720]+ba[ext=m4a]/bv*[height<=720]+ba/b[ext=mp4][height<=720]/b[height<=720]/b", "--merge-output-format", "mp4"},
+	"video_480":  {"-f", "bv*[ext=mp4][height<=480]+ba[ext=m4a]/bv*[height<=480]+ba/b[ext=mp4][height<=480]/b[height<=480]/b", "--merge-output-format", "mp4"},
+	// 音频:多数站点音轨本就是 m4a,仅 remux;mp3 需转码但音频转码很快。
+	// 末尾的 /best 兜底:tv 等受限客户端拿不到独立音轨时,退回最佳合成格式
+	// 再用 -x 抽音轨,避免 "Requested format is not available"。
+	"audio_m4a": {"-f", "bestaudio/best", "-x", "--audio-format", "m4a"},
+	"audio_mp3": {"-f", "bestaudio/best", "-x", "--audio-format", "mp3", "--audio-quality", "0"},
 }
 
 // 旧版任务记录里的预设名兼容
@@ -207,6 +214,9 @@ func hintFor(log string) string {
 		return "\n\n[PocketDrive] 年龄限制视频,需要在「高级设置」里配置已登录账号的 cookies。"
 	case strings.Contains(log, "ffmpeg") && strings.Contains(log, "not installed"):
 		return "\n\n[PocketDrive] 缺 ffmpeg,音视频合并做不了。"
+	case strings.Contains(log, "Requested format is not available"):
+		return "\n\n[PocketDrive] 当前播放器客户端返回的格式里没有你要的那种。" +
+			"到「高级设置」把播放器客户端从 tv 改成默认或 web_safari 再试;音频任务会自动退而求其次找可用的格式。"
 	}
 	return ""
 }
@@ -341,6 +351,10 @@ func (m *Manager) finish(t *db.YtdlpTask, status, errMsg string) {
 	t.Status = status
 	t.ErrorMsg = errMsg
 	m.db.Save(t)
+	// 后台任务没有请求可以挂错误,失败只写在任务卡上,页面一关就没了
+	if status == "error" {
+		logs.Errorf("ytdlp", "任务 #%d 失败 (%s): %s", t.ID, t.URL, errMsg)
+	}
 }
 
 func lastLines(s string, n int) string {

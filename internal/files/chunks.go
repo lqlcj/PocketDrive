@@ -234,6 +234,12 @@ func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {
 		}
 		us.ID, us.S3UploadID = "s3"+randHex(), uploadID
 	} else {
+		// 本机:总大小已知,动手之前就拦下装不下的;分片暂存在 tmpDir
+		// (DB 同级,不在网盘里),complete 落盘时才真正占网盘配额
+		if err := s.checkLocal(req.Size); err != nil {
+			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+			return
+		}
 		us.ID = randHex()
 		if err := os.MkdirAll(filepath.Join(s.tmpDir, us.ID), 0o755); err != nil {
 			httpx.Err(w, http.StatusInternalServerError, err.Error())
@@ -398,6 +404,9 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusInternalServerError, "拼接分片失败: "+err.Error())
 			return
 		}
+	}
+	if fi, err := out.Stat(); err == nil {
+		s.addUsage(fi.Size())
 	}
 	if err := out.Close(); err != nil {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())

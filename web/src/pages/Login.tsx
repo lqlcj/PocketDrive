@@ -65,7 +65,7 @@ export default function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
                     />
                 </div>
                 <div className="relative z-10 text-[13px] text-ink-soft">
-                    你的口袋小岛网盘 · 输密码时他们会把头扭过去的,放心
+                    你的口袋网盘 
                 </div>
                 {/* 氛围光斑 */}
                 <div className="absolute top-[18%] right-[12%] size-64 rounded-full bg-leaf/15 blur-[80px]" />
@@ -82,7 +82,7 @@ export default function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
                             </span>
                         </div>
                         <h1 className="text-[26px] font-extrabold tracking-tight">
-                            欢迎回岛!
+                            欢迎回来!
                         </h1>
                         <p className="text-sm text-ink-soft mt-1.5">登录你的 PocketDrive</p>
                     </div>
@@ -159,7 +159,7 @@ export default function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
                             disabled={loading}
                             className="w-full h-12 text-[15px]"
                         >
-                            {loading ? '登岛中…' : '登录'}
+                            {loading ? '登录中…' : '登录'}
                         </Button>
                     </form>
 

@@ -13,6 +13,8 @@ export default function SearchBox() {
     const [results, setResults] = useState<IndexItem[]>([]);
     const [open, setOpen] = useState(false);
     const boxRef = useRef<HTMLDivElement>(null);
+    // 请求序号:慢回来的旧请求不许盖掉新一轮的结果
+    const seq = useRef(0);
 
     useEffect(() => {
         if (!q.trim()) {
@@ -21,9 +23,12 @@ export default function SearchBox() {
             return;
         }
         const t = setTimeout(() => {
+            const my = ++seq.current;
             api.search(q)
                 .then((r) => {
-                    setResults(r.results);
+                    if (my !== seq.current) return;
+                    // 后端没结果时可能回 null,兜一层空数组
+                    setResults(r.results ?? []);
                     setOpen(true);
                 })
                 .catch(() => undefined);
@@ -41,17 +46,18 @@ export default function SearchBox() {
         return () => document.removeEventListener('mousedown', onDown);
     }, []);
 
+    /**
+     * 跳到目标所在的目录,并把名字塞进路由 state ——
+     * Files 页拿到后翻到它那一页、滚过去、闪几下。
+     * 文件夹也一样落在父目录里高亮,先让人看清它在哪儿,再决定要不要点进去。
+     */
     const go = (it: IndexItem) => {
         setOpen(false);
         setQ('');
-        if (it.dir) {
-            navigate(`/files/${it.path}`);
-        } else {
-            const parent = it.path.includes('/')
-                ? it.path.slice(0, it.path.lastIndexOf('/'))
-                : '';
-            navigate(`/files/${parent}`);
-        }
+        const parent = it.path.includes('/')
+            ? it.path.slice(0, it.path.lastIndexOf('/'))
+            : '';
+        navigate(`/files/${parent}`, { state: { highlight: it.name } });
     };
 
     return (

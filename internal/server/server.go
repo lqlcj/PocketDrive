@@ -99,6 +99,9 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("POST /api/v1/storages", d.Cloud.HandleSave)
 	api.HandleFunc("POST /api/v1/storages/delete", d.Cloud.HandleDelete)
 	api.HandleFunc("POST /api/v1/storages/test", d.Cloud.HandleTest)
+	// 外部存储全局开关(目前只有 WebDAV 是否直连存储桶)
+	api.HandleFunc("GET /api/v1/storages/settings", d.Cloud.HandleGetSettings)
+	api.HandleFunc("POST /api/v1/storages/settings", d.Cloud.HandleSaveSettings)
 
 	api.HandleFunc("GET /api/v1/downloads/settings", d.Aria2.HandleGetSettings)
 	api.HandleFunc("POST /api/v1/downloads/settings", d.Aria2.HandleSaveSettings)
@@ -119,8 +122,12 @@ func New(cfg *config.Config, d Deps) *http.Server {
 			"recent": d.Storage.Recent(),
 			// 挂载的外部存储各自的用量,首次访问返回 pending 并后台统计
 			"mounts": d.Cloud.UsageAll(),
+			// 本机网盘目录的用量与上限,首次访问返回 pending 并后台统计
+			"local": d.Storage.Usage(),
 		})
 	})
+	// 本机容量上限,0 = 不限(与 S3 挂载的 quota 同一套语义)
+	api.HandleFunc("POST /api/v1/storage/quota", d.Storage.HandleSetQuota)
 
 	// 档案:压缩/解压是异步任务;整盘导出导入用于换 VPS 迁移
 	api.HandleFunc("GET /api/v1/archive", d.Archive.HandleList)
@@ -134,9 +141,16 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/components", d.Components.HandleList)
 	api.HandleFunc("POST /api/v1/components/install", d.Components.HandleInstall)
 
+	// 错误日志:只记 error、每天清空,供出问题时回看
+	api.HandleFunc("GET /api/v1/logs", handleLogs)
+	api.HandleFunc("POST /api/v1/logs/clear", handleLogsClear)
+	api.HandleFunc("GET /api/v1/logs/download", handleLogsDownload)
+
 	api.HandleFunc("GET /api/v1/downloads", d.Aria2.HandleList)
 	api.HandleFunc("POST /api/v1/downloads", d.Aria2.HandleAdd)
 	api.HandleFunc("POST /api/v1/downloads/torrent", d.Aria2.HandleAddTorrent)
+	api.HandleFunc("GET /api/v1/downloads/{gid}/files", d.Aria2.HandleTorrentFiles)
+	api.HandleFunc("POST /api/v1/downloads/{gid}/select", d.Aria2.HandleSelectFiles)
 	api.HandleFunc("POST /api/v1/downloads/pause", d.Aria2.HandlePause)
 	api.HandleFunc("POST /api/v1/downloads/unpause", d.Aria2.HandleUnpause)
 	api.HandleFunc("POST /api/v1/downloads/remove", d.Aria2.HandleRemove)
@@ -161,7 +175,8 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	mux.Handle("/", web.Handler())
 
 	return &http.Server{
-		Addr:    cfg.Addr,
-		Handler: auth.CSRF(mux),
+		Addr: cfg.Addr,
+		// observe 在最外层:CSRF 自己也可能 panic 或返回 5xx
+		Handler: observe(auth.CSRF(mux)),
 	}
 }

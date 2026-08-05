@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
     CloudDownload,
     FolderOpen,
@@ -21,6 +21,7 @@ import type { Profile } from '../api';
 import { Button } from './ui/button';
 import SearchBox from './SearchBox';
 import Avatar from './Avatar';
+import ErrorBoundary from './ErrorBoundary';
 import { applyTheme, getTheme } from '../theme';
 import type { Theme } from '../theme';
 import { cn } from '../lib/utils';
@@ -67,6 +68,7 @@ export default function Layout({
 }) {
     const [mobileOpen, setMobileOpen] = useState(false);
     const [theme, setTheme] = useState<Theme>(getTheme());
+    const location = useLocation();
 
     const toggleTheme = () => {
         const next: Theme = theme === 'light' ? 'dark' : 'light';
@@ -162,7 +164,10 @@ export default function Layout({
 
                 {/* 版心居中 */}
                 <main className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 pb-16">
-                    <Outlet />
+                    {/* 单个页面崩了不牵连侧栏和搜索;换个路由自动复位 */}
+                    <ErrorBoundary resetKey={location.pathname}>
+                        <Outlet />
+                    </ErrorBoundary>
                 </main>
             </div>
         </div>

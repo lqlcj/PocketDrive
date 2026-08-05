@@ -37,19 +37,34 @@ function statusText(it: UploadItem): string {
 }
 
 export default function UploadPanel() {
-    const { items, pause, resume, cancel, clearFinished } = useUploads();
+    const {
+        items,
+        pause,
+        resume,
+        cancel,
+        pauseAll,
+        resumeAll,
+        cancelAll,
+        clearFinished,
+    } = useUploads();
     const [collapsed, setCollapsed] = useState(false);
 
     if (items.length === 0) return null;
 
     const active = items.filter((i) => i.status === 'uploading' || i.status === 'queued');
     const doneCount = items.filter((i) => i.status === 'done').length;
+    // 批量按钮按需出现:没有可暂停的就不显示「全部暂停」
+    const pausableCount = active.length;
+    const resumableCount = items.filter(
+        (i) => i.status === 'paused' || i.status === 'error',
+    ).length;
     const totalBytes = items.reduce((s, i) => s + i.size, 0);
     const sentBytes = items.reduce((s, i) => s + (i.status === 'done' ? i.size : i.sent), 0);
     const overall = totalBytes > 0 ? (sentBytes / totalBytes) * 100 : 0;
 
     return (
-        <div className="fixed bottom-3 right-3 z-40 w-[min(92vw,22rem)]">
+        // 定位交给 App 里的右下角面板栈,这里只管自己多宽
+        <div className="w-[min(92vw,22rem)]">
             <div className="bg-paper border border-line/70 rounded-[var(--radius-card)] shadow-lg overflow-hidden">
                 {/* 标题条:点一下收起/展开 */}
                 <button
@@ -170,8 +185,28 @@ export default function UploadPanel() {
                             ))}
                         </div>
 
-                        <div className="px-3 py-1.5 border-t border-line/50 flex justify-end">
-                            <Button size="sm" variant="ghost" onClick={clearFinished}>
+                        <div className="px-3 py-1.5 border-t border-line/50 flex items-center gap-1 flex-wrap">
+                            {pausableCount > 0 && (
+                                <Button size="sm" variant="ghost" onClick={pauseAll}>
+                                    <Pause className="size-3.5" /> 全部暂停
+                                </Button>
+                            )}
+                            {resumableCount > 0 && (
+                                <Button size="sm" variant="ghost" onClick={resumeAll}>
+                                    <Play className="size-3.5" /> 全部继续
+                                </Button>
+                            )}
+                            {(pausableCount > 0 || resumableCount > 0) && (
+                                <Button size="sm" variant="ghost-danger" onClick={cancelAll}>
+                                    <X className="size-3.5" /> 全部取消
+                                </Button>
+                            )}
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                className="ml-auto"
+                                onClick={clearFinished}
+                            >
                                 清空已完成
                             </Button>
                         </div>

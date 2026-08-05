@@ -6,7 +6,8 @@
 //     大文件分片映射为 S3 Multipart Upload,不在 VPS 落盘
 //   - 下载/直链 302 到预签名 URL(R2 出站流量免费,不过 VPS 中转);
 //     <video>/<img>/播放器加载媒体不受同源策略限制,同样无 CORS 问题
-//   - WebDAV 通过同一套挂载分发(davfs.go)
+//   - WebDAV 通过同一套挂载分发(davfs.go);读文件默认同样 302 直连,
+//     不跟随重定向的客户端可在设置里关掉退回中转(settings.go)
 //
 // 边界(与本机策略的差异,均有意为之):离线下载/yt下载只能落本机
 // (aria2/yt-dlp 是本机进程);外部存储删除不进回收站;不生成缩略图;
@@ -20,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
@@ -41,6 +43,9 @@ type Service struct {
 
 	uMu   sync.Mutex
 	usage map[string]usageEntry // name -> 用量缓存
+
+	// WebDAV 直连开关的内存副本(见 settings.go),每次 GET 都要读
+	davDirect atomic.Bool
 }
 
 func New(gdb *gorm.DB) *Service {
@@ -49,6 +54,7 @@ func New(gdb *gorm.DB) *Service {
 		mounts: make(map[string]*S3Mount),
 		usage:  make(map[string]usageEntry),
 	}
+	s.davDirect.Store(s.loadSettings().DavDirect)
 	s.reload()
 	return s
 }

@@ -16,7 +16,9 @@ import Settings from './pages/Settings';
 import StoragePage from './pages/StoragePage';
 import SharePage from './pages/SharePage';
 import UploadPanel from './components/UploadPanel';
+import MusicPlayer from './components/MusicPlayer';
 import { UploadProvider } from './upload/store';
+import { PlayerProvider } from './player/store';
 
 function Private({
     profile,
@@ -39,27 +41,36 @@ function Private({
     }
     return (
         <UploadProvider>
-            <Routes>
-                <Route element={<Layout profile={profile} onLogout={onLogout} />}>
-                    {/* 我的文件即主页 */}
-                    <Route path="/" element={<Navigate to="/files" replace />} />
-                    <Route path="/files/*" element={<Files />} />
-                    <Route path="/note/*" element={<NoteEditor />} />
-                    <Route path="/downloads" element={<Downloads />} />
-                    <Route path="/downloads/settings" element={<DownloadSettings />} />
-                    <Route path="/video" element={<VideoDL />} />
-                    <Route path="/shares" element={<SharesPage />} />
-                    <Route path="/trash" element={<Trash />} />
-                    <Route path="/storage" element={<StoragePage />} />
-                    <Route
-                        path="/settings"
-                        element={<Settings profile={profile} onProfile={onProfile} />}
-                    />
-                    <Route path="*" element={<Navigate to="/files" replace />} />
-                </Route>
-            </Routes>
-            {/* 上传面板挂在路由外:切页面不打断正在传的文件 */}
-            <UploadPanel />
+            <PlayerProvider>
+                <Routes>
+                    <Route element={<Layout profile={profile} onLogout={onLogout} />}>
+                        {/* 我的文件即主页 */}
+                        <Route path="/" element={<Navigate to="/files" replace />} />
+                        <Route path="/files/*" element={<Files />} />
+                        <Route path="/note/*" element={<NoteEditor />} />
+                        <Route path="/downloads" element={<Downloads />} />
+                        <Route path="/downloads/settings" element={<DownloadSettings />} />
+                        <Route path="/video" element={<VideoDL />} />
+                        <Route path="/shares" element={<SharesPage />} />
+                        <Route path="/trash" element={<Trash />} />
+                        <Route path="/storage" element={<StoragePage />} />
+                        <Route
+                            path="/settings"
+                            element={<Settings profile={profile} onProfile={onProfile} />}
+                        />
+                        <Route path="*" element={<Navigate to="/files" replace />} />
+                    </Route>
+                </Routes>
+                {/*
+                  右下角的面板栈,挂在路由外:切页面既不打断上传,也不打断音乐。
+                  音乐在上、上传在下,两个都可能不存在(各自返回 null),
+                  栈会自己塌下去,不用算偏移。
+                */}
+                <div className="fixed bottom-3 right-3 z-40 flex flex-col items-end gap-2">
+                    <MusicPlayer />
+                    <UploadPanel />
+                </div>
+            </PlayerProvider>
         </UploadProvider>
     );
 }
