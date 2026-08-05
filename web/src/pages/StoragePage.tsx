@@ -329,26 +329,31 @@ export default function StoragePage() {
 
             {/* 添加/编辑 */}
             <Dialog open={editOpen} onOpenChange={(o) => !o && setEditOpen(false)}>
-                <DialogContent title={editingId ? `编辑 @${form.name}` : '添加 S3/R2 存储'}>
+                <DialogContent
+                    title={editingId ? `编辑 @${form.name}` : '添加 S3/R2 存储'}
+                    className="max-w-2xl"
+                >
                     <div className="flex flex-col gap-3">
-                        {field('挂载名称(将显示为 @名称 文件夹)', 'name', '例如 R2')}
-                        {field(
-                            'Endpoint',
-                            'endpoint',
-                            'https://xxxx.r2.cloudflarestorage.com',
-                        )}
                         <div className="grid grid-cols-2 gap-3">
+                            {field('挂载名称(将显示为 @名称 文件夹)', 'name', '例如 R2')}
+                            {field(
+                                'Endpoint',
+                                'endpoint',
+                                'https://xxxx.r2.cloudflarestorage.com',
+                            )}
                             {field('Bucket 桶名', 'bucket', 'my-bucket')}
                             {field('Region(R2 留空)', 'region', 'auto')}
+                            {field('Access Key ID', 'accessKey', '')}
+                            {field('桶内路径前缀(可选)', 'basePath', '例如 pocketdrive')}
+                            {field(
+                                editingId
+                                    ? 'Secret Key(留空 = 不修改)'
+                                    : 'Secret Access Key',
+                                'secretKey',
+                                '',
+                                'password',
+                            )}
                         </div>
-                        {field('Access Key ID', 'accessKey', '')}
-                        {field(
-                            editingId ? 'Secret Key(留空 = 不修改)' : 'Secret Access Key',
-                            'secretKey',
-                            '',
-                            'password',
-                        )}
-                        {field('桶内路径前缀(可选)', 'basePath', '例如 pocketdrive')}
                         <div>
                             <label className="block text-xs font-bold text-ink-soft mb-1">
                                 容量上限(GB,0 或留空表示不限)

@@ -133,9 +133,9 @@ export default function DownloadFileSelect({
                     </span>
                     {item.magnet && elapsed >= 15 && (
                         <span className="text-xs max-w-md text-center leading-relaxed">
-                            元数据需要从做种节点或 tracker 拉取,通常几十秒内完成。
-                            如果迟迟没有动静,多半是磁力没人做种、或 aria2 容器的
-                            DHT/BT 端口(6888 UDP)被防火墙挡了。
+                            元数据由 PocketDrive 自己用 tracker 列表 + DHT 拉取,
+                            通常几十秒内完成。迟迟拿不到多半是磁力没人做种,
+                            或磁力里带的 tracker 已经失效。
                         </span>
                     )}
                 </div>
@@ -144,13 +144,13 @@ export default function DownloadFileSelect({
                     <span>
                         {item.magnet
                             ? '超过 2 分钟还没拿到种子信息。磁力没人做种、tracker 失效,'
-                              + '或 aria2 容器的 DHT/BT 端口(6888 UDP)被防火墙挡了都可能这样。'
+                              + '或 DHT 被防火墙挡了都可能这样。'
                             : '没能拿到种子文件列表(aria2 可能暂时不可达)'}
                     </span>
                     {item.magnet && (
                         <span className="text-xs max-w-md text-center leading-relaxed">
-                            建议:确认防火墙放行 6888(TCP+UDP);如果这个磁力一直没人做种,
-                            换用 .torrent 种子文件上传通常更快。
+                            建议:如果这个磁力一直没人做种,换用 .torrent 种子文件
+                            上传通常更快;或确认服务器能出网(tracker 需要外连)。
                         </span>
                     )}
                     <div className="flex gap-2">

@@ -521,3 +521,151 @@ func TestLocalPathRejectsEscape(t *testing.T) {
 		t.Fatal("网盘内的正常路径应当被接受")
 	}
 }
+
+func TestMagnetHash(t *testing.T) {
+	good := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20)
+	if h, err := magnetHash(good); err != nil || h != strings.Repeat("ab", 20) {
+		t.Fatalf("magnetHash(%q) = %q, %v; want 40 位小写 hex", good, h, err)
+	}
+	// 大写转小写
+	if h, err := magnetHash("magnet:?xt=urn:btih:" + strings.Repeat("AB", 20)); err != nil || h != strings.Repeat("ab", 20) {
+		t.Fatalf("大写 btih 应当转小写,得到 %q, %v", h, err)
+	}
+	// 后面还跟别的参数
+	if h, err := magnetHash(good + "&dn=foo&tr=http://x/y"); err != nil || h != strings.Repeat("ab", 20) {
+		t.Fatalf("带后续参数应只抠出 btih,得到 %q, %v", h, err)
+	}
+	for _, bad := range []string{
+		"magnet:?dn=foo",                       // 没有 btih
+		"magnet:?xt=urn:btih:abcdef",           // 不是 40 位
+		"magnet:?xt=urn:btih:" + strings.Repeat("z", 40), // 不是 hex
+	} {
+		if _, err := magnetHash(bad); err == nil {
+			t.Fatalf("magnetHash(%q) 应当报错", bad)
+		}
+	}
+}
+
+func TestWithTrackers(t *testing.T) {
+	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20)
+	out := withTrackers(magnet, "http://a.com/announce, udp://b.com/announce")
+	if !strings.Contains(out, "&tr=http%3A%2F%2Fa.com%2Fannounce") ||
+		!strings.Contains(out, "&tr=udp%3A%2F%2Fb.com%2Fannounce") {
+		t.Fatalf("tracker 没有追加进磁力: %q", out)
+	}
+	if got := withTrackers(magnet, " , ,"); got != magnet {
+		t.Fatalf("空白 tracker 应当跳过: %q", got)
+	}
+}
+
+// 磁力转种子:finishMagnet 把 aria2 里的磁力元数据任务换成 .torrent 任务,
+// 库记录迁到新 gid(follows=旧 gid),旧 gid 仍能解析,删除也照常工作。
+func TestFinishMagnetMigrates(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	old := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20)
+	task, err := m.Add(old, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+	if len(mock.added) != 1 || mock.added[0] != old {
+		t.Fatalf("磁力应先照旧交给 aria2,得到 %v", mock.added)
+	}
+
+	m.finishMagnet(metaGID, old, "bt", "ZmFrZXRvcnJlbnQ=", "some-movie")
+
+	_, tasks := m.List()
+	if len(tasks) != 1 {
+		t.Fatalf("want 1 task, got %d", len(tasks))
+	}
+	nt := tasks[0]
+	if nt.GID == metaGID {
+		t.Fatalf("gid 应换成种子任务,还是旧 %q", metaGID)
+	}
+	if nt.Follows != metaGID {
+		t.Fatalf("新记录应记 follows=%q,得到 %q", metaGID, nt.Follows)
+	}
+	if nt.Status != "paused" {
+		t.Fatalf("转出的种子任务应为 paused,得到 %q", nt.Status)
+	}
+	if nt.URL != old {
+		t.Fatalf("URL 应保留磁力,得到 %q", nt.URL)
+	}
+	if len(mock.torrentPaused) != 1 || mock.torrentPaused[0] != "true" {
+		t.Fatalf("转出的种子任务要挂起等勾选: %v", mock.torrentPaused)
+	}
+
+	// 前端拿旧 gid 轮询/勾选/暂停/删除都要落到新任务上
+	if cur := m.resolveGID(metaGID); cur != nt.GID {
+		t.Fatalf("resolveGID(%q) = %q, want %q", metaGID, cur, nt.GID)
+	}
+	mock.statuses[nt.GID] = &Status{GID: nt.GID, Status: "paused"}
+	if _, err := m.RemoveTask(metaGID, false); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks = m.List()
+	if len(tasks) != 0 {
+		t.Fatalf("按旧 gid 删除后应无任务,got %d", len(tasks))
+	}
+}
+
+// 磁力转种子迁移旧记录删掉后,syncOne 再看到「gid 不存在」时不该把旧
+// 记录复活成一条错误任务(GORM Save 按主键 upsert 会插回来)。
+func TestSyncOneDoesNotResurrectMigratedMagnet(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	old := "magnet:?xt=urn:btih:" + strings.Repeat("ef", 20)
+	task, err := m.Add(old, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+	// aria2 视角:旧 gid 已经被删(比如 finishMagnet 里 Remove 掉)
+	delete(mock.statuses, metaGID)
+
+	// finishMagnet 迁移完成:旧记录没了,新记录 follows=旧 gid
+	m.finishMagnet(metaGID, old, "bt", "ZmFrZXRvcnJlbnQ=", "m")
+	if _, tasks := m.List(); len(tasks) != 1 {
+		t.Fatalf("迁移后应有 1 条任务,got %d", len(tasks))
+	}
+
+	m.sync()
+	_, tasks := m.List()
+	if len(tasks) != 1 || tasks[0].GID == metaGID {
+		t.Fatalf("旧磁力记录不应被复活,got %+v", tasks)
+	}
+	if tasks[0].Status != "paused" {
+		t.Fatalf("新任务状态 = %q, want paused", tasks[0].Status)
+	}
+}
+
+// 磁力已被 aria2 自己 follow(或用户已删除)时,finishMagnet 不该再迁移
+// 出第二条任务。
+func TestFinishMagnetNoOpWhenMigrated(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	old := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20)
+	task, err := m.Add(old, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+
+	// 先手动把旧记录迁走,模拟 aria2 followedBy 抢先
+	m.db.Delete(&db.DownloadTask{}, "gid = ?", metaGID)
+	nt := db.DownloadTask{
+		GID: "realgid", URL: old, Dir: "bt", Status: "active", Follows: metaGID,
+	}
+	m.db.Create(&nt)
+
+	m.finishMagnet(metaGID, old, "bt", "ZmFrZXRvcnJlbnQ=", "x")
+
+	_, tasks := m.List()
+	if len(tasks) != 1 || tasks[0].GID != "realgid" {
+		t.Fatalf("已迁移的任务不应被再次替换,got %+v", tasks)
+	}
+	if len(mock.torrentPaused) != 0 {
+		t.Fatalf("不该再往 aria2 里塞种子任务: %v", mock.torrentPaused)
+	}
+}

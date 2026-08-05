@@ -36,6 +36,11 @@ type Manager struct {
 	mu     sync.Mutex
 	speeds map[string]int64
 
+	// migMu 串行化「磁力元数据 gid → 真实下载 gid」的迁移:aria2 自己的
+	// followedBy 迁移(syncOne)和「磁力转种子」的替换(finishMagnet)
+	// 可能并发,不加锁会迁出重复任务。
+	migMu sync.Mutex
+
 	verMu   sync.Mutex
 	version string
 	verAt   time.Time
@@ -129,10 +134,18 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	st, err := m.c.TellStatus(t.GID)
 	if err != nil {
 		if strings.Contains(err.Error(), "is not found") {
-			// aria2 重启丢了任务(未到终态):标记错误,历史保留
-			t.Status = "error"
-			t.ErrorMsg = "任务在 aria2 中丢失(aria2 可能重启过)"
-			m.db.Save(t)
+			// aria2 重启丢了任务(未到终态):标记错误,历史保留。
+			// 和 finishMagnet 串行化:它可能在两秒的同步间隔里把旧磁力
+			// 记录删掉换成了种子任务,别用 Save(按主键 upsert)把
+			// 旧记录又复活出来。
+			m.migMu.Lock()
+			var still db.DownloadTask
+			if m.db.First(&still, "gid = ?", t.GID).Error == nil {
+				t.Status = "error"
+				t.ErrorMsg = "任务在 aria2 中丢失(aria2 可能重启过)"
+				m.db.Save(t)
+			}
+			m.migMu.Unlock()
 			return
 		}
 		m.degraded.Store(true)
@@ -142,6 +155,13 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 
 	// 磁力:元数据下载完成后真正的下载在 followedBy gid 里,迁移记录
 	if st.Status == "complete" && len(st.FollowedBy) > 0 {
+		m.migMu.Lock()
+		// 拿到锁后任务可能已被 finishMagnet(磁力转种子)迁移/删除
+		var still db.DownloadTask
+		if err := m.db.First(&still, "gid = ?", t.GID).Error; err != nil {
+			m.migMu.Unlock()
+			return
+		}
 		newGID := st.FollowedBy[0]
 		m.db.Delete(&db.DownloadTask{}, "gid = ?", t.GID)
 		nt := db.DownloadTask{
@@ -150,6 +170,7 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 			Follows: t.GID,
 		}
 		m.db.Save(&nt)
+		m.migMu.Unlock()
 		m.syncOne(&nt)
 		return
 	}
@@ -292,6 +313,15 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	if err := m.db.Create(&t).Error; err != nil {
 		return nil, err
 	}
+	// 磁力:aria2 只负责「先挂着拉元数据」,元数据由 PocketDrive 自己
+	// 用 DHT + tracker 取到后转成 .torrent 再走 AddTorrent(和上传种子
+	// 同一条路),转完会在 finishMagnet 里迁移记录。aria2 自己拉不到的
+	// 磁力这里基本都能救回来;转不出来时原磁力任务还在,不丢任务。
+	if strings.HasPrefix(rawURL, "magnet:") {
+		if hash, err := magnetHash(rawURL); err == nil {
+			m.startMagnetConvert(gid, rawURL, relDir, hash)
+		}
+	}
 	return &t, nil
 }
 
@@ -345,10 +375,12 @@ type TorrentFile struct {
 // resolveGID 把前端传进来的 gid(磁力链拿到的通常是元数据 gid)解析成
 // aria2 当前真实下载的 gid。磁力元数据就绪后 aria2 会 follow 出新 gid,
 // 旧 gid 只留一条 [METADATA] 伪文件——拿旧 gid 永远等不出文件清单。
-// 先查库里迁移记录(follows),再用 aria2 的 followedBy 兜底。
+// 顺序:①库里迁移记录(follows=旧gid)→新 gid;②aria2 的 followedBy。
+// 先查 follows 再查 gid:finishMagnet 先建新记录后删旧的,这个顺序保证
+// 中间窗口里旧 gid 永远能翻到新 gid。
 func (m *Manager) resolveGID(gid string) string {
 	var t db.DownloadTask
-	if err := m.db.Where("gid = ? OR follows = ?", gid, gid).First(&t).Error; err == nil && t.GID != gid {
+	if err := m.db.Where("follows = ?", gid).First(&t).Error; err == nil {
 		return t.GID
 	}
 	st, err := m.c.TellStatus(gid)
