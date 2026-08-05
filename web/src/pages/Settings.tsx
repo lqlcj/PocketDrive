@@ -1,7 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type {
@@ -10,16 +7,14 @@ import type {
     LocalUsage,
     MountUsage,
     Profile,
-    RecentFile,
 } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Input, Checkbox } from '../components/ui/input';
+import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import { Badge, Progress } from '../components/ui/progress';
-import KindIcon from '../components/KindIcon';
 import Avatar from '../components/Avatar';
-import { fileKind, formatBytes, formatTime, copyText } from '../util';
+import { formatBytes, formatTime, copyText } from '../util';
 
 // compose 文件在服务器上的哪个目录,容器里是看不出来的(compose 只把
 // 工作目录写进容器 label,进程自己读不到),所以让用户自己填、记在
@@ -139,14 +134,14 @@ export default function Settings({
 
     const [disk, setDisk] = useState<DiskInfo | null>(null);
     const [local, setLocal] = useState<LocalUsage | null>(null);
-    const [recent, setRecent] = useState<RecentFile[]>([]);
     const [mounts, setMounts] = useState<MountUsage[]>([]);
 
     const [comps, setComps] = useState<ComponentInfo[] | null>(null);
     const [installing, setInstalling] = useState('');
-
-    // WebDAV 读外部存储是否直连存储桶(null = 还没读到)
-    const [davDirect, setDavDirect] = useState<boolean | null>(null);
+    const [updateEnabled, setUpdateEnabled] = useState<boolean | null>(null);
+    const [updateOpen, setUpdateOpen] = useState(false);
+    const [updatePassword, setUpdatePassword] = useState('');
+    const [updating, setUpdating] = useState(false);
 
     // 头像:上传图片存在配置目录,不进网盘
     const avatarInput = useRef<HTMLInputElement>(null);
@@ -169,7 +164,6 @@ export default function Settings({
             .then((r) => {
                 setDisk(r.disk);
                 setLocal(r.local);
-                setRecent(r.recent ?? []);
                 setMounts(r.mounts ?? []);
             })
             .catch(() => undefined);
@@ -178,29 +172,8 @@ export default function Settings({
     useEffect(() => {
         loadStorage();
         loadComponents();
+        api.updateStatus().then((r) => setUpdateEnabled(r.enabled)).catch(() => setUpdateEnabled(false));
     }, [loadStorage, loadComponents]);
-
-    useEffect(() => {
-        api.cloudSettings()
-            .then((r) => setDavDirect(r.settings.davDirect))
-            .catch(() => undefined);
-    }, []);
-
-    // 直连开关立即生效,不跟"保存资料"那个按钮混在一起;失败就回滚复选框
-    const toggleDavDirect = async (on: boolean) => {
-        const prev = davDirect;
-        setDavDirect(on);
-        try {
-            const r = await api.saveCloudSettings({ davDirect: on });
-            setDavDirect(r.settings.davDirect);
-            toast.success(
-                on ? '已开启:播放器将直连存储桶' : '已关闭:改由本站中转',
-            );
-        } catch (e) {
-            setDavDirect(prev);
-            toast.error(e instanceof Error ? e.message : '保存失败');
-        }
-    };
 
     // 资料 + 密码一个按钮保存:改了哪部分就提交哪部分
     const save = async () => {
@@ -290,6 +263,21 @@ export default function Settings({
         else toast.warning('复制失败,请手动选中');
     };
 
+    const triggerUpdate = async () => {
+        if (!updatePassword) return;
+        setUpdating(true);
+        try {
+            await api.triggerUpdate(updatePassword);
+            setUpdateOpen(false);
+            setUpdatePassword('');
+            toast.success('升级已开始,服务会短暂重启;请稍后刷新页面', { duration: 8000 });
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '升级失败');
+        } finally {
+            setUpdating(false);
+        }
+    };
+
     const doImport = async () => {
         if (!importFile) return;
         setImporting(true);
@@ -305,15 +293,6 @@ export default function Settings({
         }
     };
 
-    const davURL = `${window.location.origin}/dav/`;
-
-    const kv = (label: string, value: ReactNode) => (
-        <div className="flex items-center gap-2.5 py-1.5 text-sm flex-wrap">
-            <span className="text-ink-soft min-w-32">{label}</span>
-            {value}
-        </div>
-    );
-
     return (
         <div>
             <h2 className="text-xl font-extrabold mb-4">设置</h2>
@@ -322,11 +301,10 @@ export default function Settings({
             <div className="grid md:grid-cols-2 gap-3 items-start">
                 {/* 左列:账户 */}
                 <div className="flex flex-col gap-3">
-                    {/* 个人资料 + 修改密码:一个按钮统一保存 */}
-                    <Card>
-                        <CardTitle>个人资料</CardTitle>
-                        <div className="flex items-center gap-3">
-                            <Avatar profile={profile} size="lg" />
+                    <Card className="p-3">
+                        <CardTitle className="mb-2">个人资料</CardTitle>
+                        <div className="flex items-center gap-2.5">
+                            <Avatar profile={profile} size="md" />
                             <div className="flex-1 min-w-0">
                                 <input
                                     ref={avatarInput}
@@ -335,7 +313,7 @@ export default function Settings({
                                     hidden
                                     onChange={(e) => onAvatarPick(e.target.files?.[0])}
                                 />
-                                <div className="flex gap-2 flex-wrap">
+                                <div className="flex gap-1.5 flex-wrap">
                                     <Button
                                         size="sm"
                                         disabled={avatarBusy}
@@ -354,13 +332,9 @@ export default function Settings({
                                         </Button>
                                     )}
                                 </div>
-                                <p className="text-xs text-ink-soft mt-1.5">
-                                    会裁成正方形缩到 256px。不上传就用用户名首字母。
-                                    头像存在配置目录,不会出现在网盘和 WebDAV 里
-                                </p>
                             </div>
                         </div>
-                        <div className="flex flex-col gap-2.5 mt-3">
+                        <div className="mt-2.5">
                             <Input
                                 placeholder="用户名(2-32 字符)"
                                 value={username}
@@ -368,14 +342,11 @@ export default function Settings({
                             />
                         </div>
 
-                        <div className="border-t border-line/70 mt-4 pt-4">
-                            <div className="font-bold text-sm mb-2.5">
+                        <details className="border-t border-line/70 mt-2.5 pt-2.5">
+                            <summary className="font-bold text-sm cursor-pointer select-none">
                                 修改密码
-                                <span className="text-xs text-ink-soft font-normal ml-1.5">
-                                    (不改密码就留空)
-                                </span>
-                            </div>
-                            <div className="flex flex-col gap-2.5">
+                            </summary>
+                            <div className="flex flex-col gap-2 mt-2.5">
                                 <Input
                                     type="password"
                                     placeholder="当前密码"
@@ -398,45 +369,13 @@ export default function Settings({
                                     onChange={(e) => setConfirm(e.target.value)}
                                 />
                             </div>
-                        </div>
+                        </details>
 
-                        <div className="flex flex-col gap-1.5 mt-4">
-                            <Button variant="primary" disabled={saving} onClick={save}>
+                        <div className="mt-2.5 flex justify-end">
+                            <Button size="sm" variant="primary" disabled={saving} onClick={save}>
                                 {saving ? '保存中…' : '保存'}
                             </Button>
-                            <p className="text-xs text-ink-soft">
-                                改用户名/密码后,WebDAV 的登录信息同步变化,手机端记得更新
-                            </p>
                         </div>
-                    </Card>
-
-                    <Card>
-                        <CardTitle>最近修改</CardTitle>
-                        {recent.length === 0 ? (
-                            <p className="text-sm text-ink-soft">暂无最近修改的文件</p>
-                        ) : (
-                            <div className="flex flex-col gap-1.5">
-                                {recent.map((f) => (
-                                    <Link
-                                        key={f.path}
-                                        to={`/files/${
-                                            f.path.includes('/')
-                                                ? f.path.slice(0, f.path.lastIndexOf('/'))
-                                                : ''
-                                        }`}
-                                        className="flex items-center gap-2 text-sm hover:bg-paper-2 rounded-lg px-2 py-1 -mx-2"
-                                    >
-                                        <KindIcon kind={fileKind(f.name)} />
-                                        <span className="flex-1 min-w-0 truncate font-bold">
-                                            {f.name}
-                                        </span>
-                                        <span className="text-xs text-ink-soft shrink-0">
-                                            {formatTime(f.mtime).slice(5)}
-                                        </span>
-                                    </Link>
-                                ))}
-                            </div>
-                        )}
                     </Card>
                 </div>
 
@@ -507,46 +446,6 @@ export default function Settings({
                         ))}
                     </Card>
 
-                    <Link to="/storage" className="block">
-                        <Card className="hover:border-leaf/50 transition-colors">
-                            <div className="flex items-center gap-3">
-                                <div className="flex-1 min-w-0">
-                                    <div className="font-bold text-[15px]">存储策略</div>
-                                    <div className="text-xs text-ink-soft mt-0.5">
-                                        挂载 Cloudflare R2 / S3 兼容对象存储,显示为 @名称
-                                        文件夹,网页与 WebDAV 通用
-                                    </div>
-                                </div>
-                                <ChevronRight className="size-4 text-ink-soft shrink-0" />
-                            </div>
-                        </Card>
-                    </Link>
-
-                    <Card>
-                        <CardTitle>WebDAV</CardTitle>
-                        <p className="text-sm text-ink-soft mb-2">
-                            手机播放器/文件管理器里添加 WebDAV 服务,即可直连整个网盘
-                            (含 @外部存储挂载):
-                        </p>
-                        {kv('地址', <code className="bg-paper-2 rounded px-2 py-0.5 break-all">{davURL}</code>)}
-                        {kv('用户名', <code className="bg-paper-2 rounded px-2 py-0.5">{profile.user}</code>)}
-                        {kv('密码', <span className="text-sm">与网页登录密码相同</span>)}
-                        {davDirect !== null && (
-                            <div className="border-t border-line mt-2.5 pt-2.5">
-                                <Checkbox
-                                    label="外部存储直连(不经本站中转)"
-                                    checked={davDirect}
-                                    onChange={(e) => toggleDavDirect(e.target.checked)}
-                                />
-                                <p className="text-xs text-ink-soft mt-1.5">
-                                    开启后,播放 @挂载 里的文件由播放器直接连存储桶,
-                                    不占本机流量(网页端一直是这样)。极少数客户端不认
-                                    重定向(如 Windows 资源管理器),播不了就关掉。
-                                </p>
-                            </div>
-                        )}
-                    </Card>
-
                     <Card>
                         <CardTitle>备份与迁移</CardTitle>
                         <p className="text-sm text-ink-soft mb-2.5">
@@ -576,6 +475,20 @@ export default function Settings({
                         <p className="text-xs text-ink-soft mt-2">
                             备份包里含存储策略的密钥,请妥善保管
                         </p>
+                    </Card>
+
+                    <Card>
+                        <CardTitle>PocketDrive 更新</CardTitle>
+                        <p className="text-sm text-ink-soft mb-2.5">
+                            从官方镜像拉取最新版本并重建容器。网盘文件、配置和密码保存在持久化卷中,不会被更新删除。
+                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <Button size="sm" variant="primary" disabled={updateEnabled !== true || updating} onClick={() => setUpdateOpen(true)}>
+                                {updating ? '升级中…' : '检查并升级'}
+                            </Button>
+                            {updateEnabled === false && <span className="text-xs text-ink-soft">当前编排未启用安全更新服务,请在 1Panel 中拉取镜像并重建</span>}
+                            {updateEnabled === true && <span className="text-xs text-ink-soft">升级前需要再次输入当前密码确认</span>}
+                        </div>
                     </Card>
 
                     <Card>
@@ -614,9 +527,7 @@ export default function Settings({
                                                 {c.installed && c.outdated && (
                                                     <> · 当前 {c.version}</>
                                                 )}
-                                                {c.lastUpdated && (
-                                                    <> · 上次更新 {formatTime(c.lastUpdated)}</>
-                                                )}
+                                                {c.lastUpdated && <> · {formatTime(c.lastUpdated)}</>}
                                             </div>
                                         </div>
                                         {c.channel === 'managed' ? (
@@ -634,9 +545,7 @@ export default function Settings({
                                                     ? '下载中…'
                                                     : !c.installed
                                                       ? '安装'
-                                                      : c.outdated
-                                                        ? '升级'
-                                                        : '重新下载'}
+                                                    : '升级'}
                                             </Button>
                                         ) : (
                                             <span className="text-xs text-ink-soft whitespace-nowrap">
@@ -646,62 +555,36 @@ export default function Settings({
                                     </div>
                                 ))}
 
-                                {/* 「以后要更新了怎么办」必须写在界面上,别让人到时候去翻文档 */}
                                 {comps.some((c) => c.channel === 'managed') ? (
-                                    <div className="border-t border-line pt-2.5 flex flex-col gap-2">
-                                        <p className="text-xs text-ink-soft leading-relaxed">
-                                            yt-dlp 装在 config 卷里,在这儿点一下就能升级,重启容器也不会退回旧版
-                                            —— 它更新最频繁,视频站点一改规则就得跟。
-                                            aria2 和 ffmpeg 跟着容器镜像走,在服务器上执行这条命令即可,
-                                            网盘文件和配置都不受影响:
-                                        </p>
-                                        <div className="flex items-center gap-2">
-                                            <code className="flex-1 min-w-0 bg-paper-2 rounded-lg px-2.5 py-1.5 text-xs break-all">
-                                                {upgradeCmd(composeDir)}
-                                            </code>
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={copyUpgradeCmd}
-                                            >
-                                                复制
-                                            </Button>
+                                    <details className="border-t border-line pt-2.5 text-xs text-ink-soft">
+                                        <summary className="cursor-pointer font-bold text-ink">
+                                            升级说明
+                                        </summary>
+                                        <div className="mt-2.5 flex flex-col gap-2.5">
+                                            <p>yt-dlp 可直接点上面的“升级”。aria2 和 ffmpeg 随容器镜像升级。</p>
+                                            <div className="flex items-center gap-2">
+                                                <span className="shrink-0">服务器命令</span>
+                                                <code className="flex-1 min-w-0 bg-paper-2 rounded-lg px-2.5 py-1.5 break-all">
+                                                    {upgradeCmd(composeDir)}
+                                                </code>
+                                                <Button size="sm" variant="ghost" onClick={copyUpgradeCmd}>复制</Button>
+                                            </div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="shrink-0">目录</span>
+                                                <Input
+                                                    className="flex-1 min-w-40"
+                                                    value={composeDir}
+                                                    placeholder={DEFAULT_COMPOSE_DIR}
+                                                    onChange={(e) => saveComposeDir(e.target.value)}
+                                                />
+                                                <Button size="sm" variant="ghost" onClick={() => saveComposeDir(DEFAULT_COMPOSE_DIR)}>一键脚本</Button>
+                                                <Button size="sm" variant="ghost" onClick={() => saveComposeDir(ONEPANEL_COMPOSE_DIR)}>1Panel</Button>
+                                            </div>
+                                            <p>
+                                                一键脚本目录是 <code>/opt/pocketdrive</code>。1Panel 请直接在“容器 → 编排”中点击“拉取镜像并重建”,或把上面的目录改成实际编排目录。
+                                            </p>
                                         </div>
-                                        {/* compose 目录因部署方式而异,容器里探测不到,让用户自己指一次 */}
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                            <span className="text-xs text-ink-soft shrink-0">
-                                                compose 目录
-                                            </span>
-                                            <Input
-                                                className="flex-1 min-w-40"
-                                                value={composeDir}
-                                                placeholder={DEFAULT_COMPOSE_DIR}
-                                                onChange={(e) => saveComposeDir(e.target.value)}
-                                            />
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={() => saveComposeDir(DEFAULT_COMPOSE_DIR)}
-                                            >
-                                                一键脚本
-                                            </Button>
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={() => saveComposeDir(ONEPANEL_COMPOSE_DIR)}
-                                            >
-                                                1Panel
-                                            </Button>
-                                        </div>
-                                        <p className="text-xs text-ink-soft leading-relaxed">
-                                            一键脚本装的在 <code>/opt/pocketdrive</code>;1Panel
-                                            编排装的在 <code>/opt/1panel/docker/compose/编排名</code>
-                                            (用 1Panel 的话,直接在「容器 → 编排」里点「拉取镜像并重建」
-                                            更省事,不用敲命令)。找不到就跑一句{' '}
-                                            <code>docker inspect pocketdrive --format '{'{{'}
-                                            index .Config.Labels "com.docker.compose.project.working_dir"{'}}'}'</code>
-                                        </p>
-                                    </div>
+                                    </details>
                                 ) : (
                                     <p className="text-xs text-ink-soft leading-relaxed">
                                         当前以本机开发方式运行,三个组件的版本都取决于你系统 PATH
@@ -715,6 +598,14 @@ export default function Settings({
                     <ErrorLogCard />
                 </div>
             </div>
+
+            <Dialog open={updateOpen} onOpenChange={(o) => { if (!o && !updating) { setUpdateOpen(false); setUpdatePassword(''); } }}>
+                <DialogContent title="确认升级">
+                    <p className="text-sm mb-3">将拉取最新官方镜像并重启 PocketDrive。正在进行的请求会短暂中断,数据不会删除。</p>
+                    <Input type="password" placeholder="输入当前登录密码" autoComplete="current-password" value={updatePassword} onChange={(e) => setUpdatePassword(e.target.value)} />
+                    <DialogFooter okText={updating ? '升级中…' : '确认升级'} okLoading={updating} onOk={triggerUpdate} />
+                </DialogContent>
+            </Dialog>
 
             {/* 导入确认:会覆盖现有网盘,所以要验密码 */}
             <Dialog open={importFile !== null} onOpenChange={(o) => !o && setImportFile(null)}>

@@ -38,6 +38,10 @@ type Config struct {
 	// ComponentsBundled 是镜像内置的只读副本目录,首次启动时复制进
 	// ComponentsDir。
 	ComponentsBundled string
+	// UpdaterURL/Token point to the private updater sidecar. Empty disables
+	// the web upgrade button and keeps manual 1Panel upgrades available.
+	UpdaterURL   string
+	UpdaterToken string
 }
 
 func Load() (*Config, error) {
@@ -54,6 +58,8 @@ func Load() (*Config, error) {
 
 		ComponentsDir:     os.Getenv("POCKETDRIVE_BIN_DIR"),
 		ComponentsBundled: os.Getenv("POCKETDRIVE_BIN_BUNDLED"),
+		UpdaterURL:        os.Getenv("POCKETDRIVE_UPDATER_URL"),
+		UpdaterToken:      os.Getenv("POCKETDRIVE_UPDATER_TOKEN"),
 	}
 	cfg.Aria2DataDir = envOr("POCKETDRIVE_ARIA2_DATA_DIR", cfg.DataDir)
 	return cfg, nil

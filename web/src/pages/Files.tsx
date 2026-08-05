@@ -134,7 +134,7 @@ function Breadcrumb({
     return (
         <div
             className={cn(
-                'text-sm break-all mb-3 rounded-lg px-2 py-1 -mx-2 flex items-center gap-1 flex-wrap',
+                'text-sm mb-3 rounded-lg px-2 py-1 -mx-2 flex items-center gap-1 min-w-0 max-w-full overflow-hidden flex-nowrap whitespace-nowrap',
                 inMount
                     ? 'bg-sky-500/10 text-sky-800 dark:text-sky-200'
                     : 'text-ink-soft',
@@ -163,15 +163,16 @@ function Breadcrumb({
                 const acc = parts.slice(0, i + 1).join('/');
                 const d = dropProps(acc);
                 return (
-                    <span key={acc}>
+                    <span key={acc} className="min-w-0 shrink overflow-hidden">
                         {' / '}
                         <Link
                             className={cn(
-                                'font-bold rounded px-1 -mx-1',
+                                'inline-block max-w-[min(70vw,32rem)] truncate align-bottom font-bold rounded px-1 -mx-1',
                                 inMount ? 'text-sky-700 dark:text-sky-300' : 'text-leaf-dark',
                                 d.active && 'bg-leaf-soft outline-2 outline-dashed outline-leaf',
                             )}
                             to={`/files/${acc}`}
+                            title={p}
                             draggable={false}
                             onMouseEnter={() => prefetchList(acc)}
                             {...d.handlers}

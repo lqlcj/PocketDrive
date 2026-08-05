@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"pocketdrive/internal/archive"
 	"pocketdrive/internal/aria2"
@@ -18,6 +20,7 @@ import (
 	"pocketdrive/internal/storage"
 	"pocketdrive/internal/thumbs"
 	"pocketdrive/internal/trash"
+	"pocketdrive/internal/updater"
 	"pocketdrive/internal/ytdlp"
 	"pocketdrive/web"
 )
@@ -36,6 +39,7 @@ type Deps struct {
 	Cloud      *cloud.Service
 	Archive    *archive.Service
 	Components *components.Service
+	Updater    *updater.Service
 }
 
 func New(cfg *config.Config, d Deps) *http.Server {
@@ -140,6 +144,30 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	// 组件状态与升级:三个组件都装在 config 卷里,可各自在网页升级
 	api.HandleFunc("GET /api/v1/components", d.Components.HandleList)
 	api.HandleFunc("POST /api/v1/components/install", d.Components.HandleInstall)
+	api.HandleFunc("GET /api/v1/system/update", func(w http.ResponseWriter, r *http.Request) {
+		enabled := d.Updater != nil && d.Updater.Enabled()
+		httpx.JSON(w, http.StatusOK, map[string]any{"enabled": enabled, "version": config.Version})
+	})
+	api.HandleFunc("POST /api/v1/system/update", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := httpx.Decode(r, &req); err != nil || req.Password == "" || !d.Auth.Check(d.Auth.User(), req.Password) {
+			httpx.Err(w, http.StatusUnauthorized, "当前密码不正确")
+			return
+		}
+		if d.Updater == nil {
+			httpx.Err(w, http.StatusNotImplemented, "在线升级未配置")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if err := d.Updater.Trigger(ctx); err != nil {
+			httpx.Err(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		httpx.JSON(w, http.StatusAccepted, map[string]any{"ok": true, "version": config.Version})
+	})
 
 	// 错误日志:只记 error、每天清空,供出问题时回看
 	api.HandleFunc("GET /api/v1/logs", handleLogs)

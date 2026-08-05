@@ -237,6 +237,7 @@ export default function Downloads() {
                 open={pickerOpen}
                 initial={dir}
                 hideMounts
+                allowCreate
                 onClose={() => setPickerOpen(false)}
                 onSelect={setDir}
             />

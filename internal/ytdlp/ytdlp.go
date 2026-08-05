@@ -192,10 +192,13 @@ func (m *Manager) networkArgs() []string {
 	if s.Proxy != "" {
 		args = append(args, "--proxy", s.Proxy)
 	}
-	if c := m.runCookies(); c != "" {
-		args = append(args, "--cookies", c)
+	cookies := m.runCookies()
+	if cookies != "" {
+		args = append(args, "--cookies", cookies)
 	}
-	if s.PlayerClient != "" && playerClients[s.PlayerClient] {
+	// ios/android_vr/tv_simply 不支持账号 cookies。有 cookies 时忽略这些
+	// 客户端并交给 yt-dlp 选择兼容客户端，否则上传了登录态也必然失败。
+	if s.PlayerClient != "" && playerClients[s.PlayerClient] && !(cookies != "" && noAccountCookieClients[s.PlayerClient]) {
 		args = append(args, "--extractor-args", "youtube:player_client="+s.PlayerClient)
 	}
 	return args
@@ -203,9 +206,14 @@ func (m *Manager) networkArgs() []string {
 
 // hintFor 在 yt-dlp 的报错后面补一句能照着做的话。yt-dlp 原文是英文
 // 且指向 wiki,对着网页用的人看不懂也不方便去翻。
-func hintFor(log string) string {
+func hintFor(log string, hasCookies bool) string {
 	switch {
 	case strings.Contains(log, "not a bot") || strings.Contains(log, "Sign in to confirm"):
+		if hasCookies {
+			return "\n\n[PocketDrive] 本次已经把 cookies 传给 yt-dlp，但 YouTube 仍拒绝了登录态。" +
+				"请重新导出已登录 YouTube 的完整 cookies；若仍失败，说明会话与 VPS 出口 IP 不匹配，" +
+				"需要让 PocketDrive 通过与浏览器相同地区/网络的代理访问。"
+		}
 		return "\n\n[PocketDrive] YouTube 把这台服务器的 IP 当成了机器人。" +
 			"到本页「高级设置」里传一份浏览器导出的 cookies.txt(或配个代理)再试。"
 	case strings.Contains(log, "Private video") || strings.Contains(log, "members-only"):
@@ -249,7 +257,9 @@ func (m *Manager) run(id uint) {
 
 	var opts Options
 	_ = json.Unmarshal([]byte(t.Options), &opts)
-	args := []string{"--newline", "--no-warnings"}
+	// 不读取宿主机的 yt-dlp 配置文件。用户配置中的 format、proxy、
+	// extractor 参数可能与网页选项冲突，导致同一个任务在不同机器上表现不同。
+	args := []string{"--ignore-config", "--newline", "--no-warnings"}
 	// 反机器人相关的三样(cookies / 代理 / player client)全部来自设置,
 	// 值走白名单或格式校验,不存在把用户输入拼成别的参数的可能
 	args = append(args, m.networkArgs()...)
@@ -292,7 +302,8 @@ func (m *Manager) run(id uint) {
 	case ctx.Err() != nil:
 		m.finish(&t, "canceled", "")
 	case err != nil:
-		m.finish(&t, "error", lastLines(t.LogTail, 5)+hintFor(t.LogTail))
+		hasCookies, _, status := m.cookieInfo()
+		m.finish(&t, "error", lastLines(t.LogTail, 5)+hintFor(t.LogTail, hasCookies && status.Valid))
 	default:
 		t.Progress = 100
 		m.finish(&t, "done", "")

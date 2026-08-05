@@ -160,9 +160,9 @@ export default function StoragePage() {
             <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <h2 className="text-xl font-extrabold">存储策略</h2>
                 <div className="ml-auto flex gap-2">
-                    <Link to="/settings">
+                    <Link to="/storage-settings">
                         <Button size="sm">
-                            <ArrowLeft className="size-3.5" /> 返回设置
+                            <ArrowLeft className="size-3.5" /> 返回储存策略
                         </Button>
                     </Link>
                     <Button variant="primary" size="sm" onClick={openAdd}>

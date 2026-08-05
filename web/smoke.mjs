@@ -1,6 +1,6 @@
 // 冒烟 v6(v0.5):动画登录页→文件页(主页)→目录树/图标(⋯ 菜单)→md 预览→
 // xlsx 预览→压缩/解压→直链→分享管理→离线下载(种子上传入口)→下载设置→
-// yt(播放列表开关)→设置(资料/容量/最近修改/组件状态/备份迁移)→搜索→
+// yt(播放列表开关)→储存策略(最近修改/WebDAV)→设置(资料/容量/组件状态/备份迁移)→搜索→
 // 黑夜模式→直链免登录验证
 //
 // 注意:会往 ../data 写测试文件(note.md / test.xlsx / music/rock),
@@ -134,12 +134,16 @@ await page.waitForSelector('text=整个播放列表批量下载', { timeout: 100
 await page.waitForTimeout(400);
 await page.screenshot({ path: `${OUT}/45-ytdl.png` });
 
-// 设置页:合并资料卡 + 容量 + 最近修改 + 组件状态 + 备份迁移
+// 储存策略页:最近修改 + 存储策略 + WebDAV
+await page.click('a:has-text("储存策略") >> nth=0');
+await page.waitForSelector('text=最近修改', { timeout: 10000 });
+await page.waitForSelector('text=WebDAV', { timeout: 5000 });
+
+// 设置页:紧凑资料卡 + 容量 + 组件状态 + 备份迁移
 await page.click('a:has-text("设置") >> nth=0');
 await page.waitForSelector('text=个人资料', { timeout: 10000 });
 await page.waitForSelector('text=修改密码', { timeout: 5000 });
 await page.waitForSelector('text=仓库容量', { timeout: 5000 });
-await page.waitForSelector('text=最近修改', { timeout: 5000 });
 await page.waitForSelector('text=组件状态', { timeout: 5000 });
 await page.waitForSelector('text=备份与迁移', { timeout: 5000 });
 await page.waitForTimeout(500);

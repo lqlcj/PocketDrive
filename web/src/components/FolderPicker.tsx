@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Cloud, Folder, Home } from 'lucide-react';
+import { Cloud, Folder, FolderPlus, Home, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import { Dialog, DialogContent, DialogFooter } from './ui/dialog';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
 
 interface Props {
     open: boolean;
@@ -16,6 +18,8 @@ interface Props {
     rootPath?: string;
     /** 隐藏 @ 挂载点(离线下载/yt下载只能落本机时用) */
     hideMounts?: boolean;
+    /** 允许在当前目录创建并选中新文件夹 */
+    allowCreate?: boolean;
     onClose: () => void;
     onSelect: (dir: string) => void;
 }
@@ -27,12 +31,16 @@ export default function FolderPicker({
     initial = '',
     rootPath = '',
     hideMounts = false,
+    allowCreate = false,
     onClose,
     onSelect,
 }: Props) {
     const [path, setPath] = useState(initial);
     const [dirs, setDirs] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
+    const [creating, setCreating] = useState(false);
+    const [folderName, setFolderName] = useState('');
+    const [creatingBusy, setCreatingBusy] = useState(false);
 
     const load = useCallback(
         (p: string) => {
@@ -54,9 +62,31 @@ export default function FolderPicker({
     );
 
     useEffect(() => {
-        if (open) load(initial || rootPath);
+        if (open) {
+            setCreating(false);
+            setFolderName('');
+            load(initial || rootPath);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
+
+    const createFolder = async () => {
+        const name = folderName.trim();
+        if (!name || creatingBusy) return;
+        const nextPath = path === '' ? name : `${path}/${name}`;
+        setCreatingBusy(true);
+        try {
+            await api.mkdir(nextPath);
+            setCreating(false);
+            setFolderName('');
+            load(nextPath);
+            toast.success(`已创建文件夹「${name}」`);
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '新建文件夹失败');
+        } finally {
+            setCreatingBusy(false);
+        }
+    };
 
     // 面包屑从浏览根开始(锁定在挂载内时,根就是挂载点)
     const relToRoot = rootPath === '' ? path : path.slice(rootPath.length).replace(/^\//, '');
@@ -66,37 +96,83 @@ export default function FolderPicker({
     return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
             <DialogContent title={title}>
-                <div className="text-sm text-ink-soft break-all mb-2">
-                    <button
-                        className="text-leaf-dark font-bold cursor-pointer inline-flex items-center gap-1 align-middle"
-                        onClick={() => load(rootPath)}
-                    >
-                        {isMount ? (
-                            <>
-                                <Cloud className="size-3.5" /> {rootPath}
-                            </>
-                        ) : (
-                            <>
-                                <Home className="size-3.5" /> 根目录
-                            </>
-                        )}
-                    </button>
-                    {parts.map((seg, i) => {
-                        const p =
-                            (rootPath ? rootPath + '/' : '') + parts.slice(0, i + 1).join('/');
-                        return (
-                            <span key={p}>
-                                {' / '}
-                                <button
-                                    className="text-leaf-dark font-bold cursor-pointer"
-                                    onClick={() => load(p)}
-                                >
-                                    {seg}
-                                </button>
-                            </span>
-                        );
-                    })}
+                <div className="flex items-start gap-2 mb-2">
+                    <div className="text-sm text-ink-soft break-all flex-1 min-w-0 py-1.5">
+                        <button
+                            className="text-leaf-dark font-bold cursor-pointer inline-flex items-center gap-1 align-middle"
+                            onClick={() => load(rootPath)}
+                        >
+                            {isMount ? (
+                                <>
+                                    <Cloud className="size-3.5" /> {rootPath}
+                                </>
+                            ) : (
+                                <>
+                                    <Home className="size-3.5" /> 根目录
+                                </>
+                            )}
+                        </button>
+                        {parts.map((seg, i) => {
+                            const p =
+                                (rootPath ? rootPath + '/' : '') + parts.slice(0, i + 1).join('/');
+                            return (
+                                <span key={p}>
+                                    {' / '}
+                                    <button
+                                        className="text-leaf-dark font-bold cursor-pointer"
+                                        onClick={() => load(p)}
+                                    >
+                                        {seg}
+                                    </button>
+                                </span>
+                            );
+                        })}
+                    </div>
+                    {allowCreate && !creating && (
+                        <Button size="sm" onClick={() => setCreating(true)}>
+                            <FolderPlus className="size-4" /> 新建文件夹
+                        </Button>
+                    )}
                 </div>
+                {allowCreate && creating && (
+                    <div className="flex items-center gap-2 mb-2">
+                        <Input
+                            autoFocus
+                            className="flex-1 min-w-0"
+                            value={folderName}
+                            placeholder="输入文件夹名称"
+                            disabled={creatingBusy}
+                            onChange={(e) => setFolderName(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') createFolder();
+                                if (e.key === 'Escape' && !creatingBusy) {
+                                    setCreating(false);
+                                    setFolderName('');
+                                }
+                            }}
+                        />
+                        <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={folderName.trim() === '' || creatingBusy}
+                            onClick={createFolder}
+                        >
+                            {creatingBusy ? '创建中…' : '创建'}
+                        </Button>
+                        <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="取消新建文件夹"
+                            disabled={creatingBusy}
+                            onClick={() => {
+                                setCreating(false);
+                                setFolderName('');
+                            }}
+                        >
+                            <X className="size-4" />
+                        </Button>
+                    </div>
+                )}
                 <div className="border border-line rounded-2xl p-1 max-h-64 overflow-auto flex flex-col">
                     {loading ? (
                         <div className="text-center text-sm text-ink-soft py-8">加载中…</div>

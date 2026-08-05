@@ -45,12 +45,19 @@ else
         say "已补写 aria2 RPC 密钥"
     fi
 fi
+if ! grep -q '^POCKETDRIVE_UPDATER_TOKEN=' .env; then
+    echo "POCKETDRIVE_UPDATER_TOKEN=$(rand 32)" >> .env
+    chmod 600 .env
+    say "已生成内部升级服务密钥"
+fi
 
 cat > docker-compose.yml <<EOF
 services:
     pocketdrive:
         image: $IMAGE
         container_name: pocketdrive
+        labels:
+            com.centurylinklabs.watchtower.enable: "true"
         restart: unless-stopped
         init: true
         ports:
@@ -63,11 +70,34 @@ services:
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
             - POCKETDRIVE_ARIA2_SECRET=\${ARIA2_SECRET}
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
+            - POCKETDRIVE_UPDATER_URL=http://pocketdrive-updater:8080
+            - POCKETDRIVE_UPDATER_TOKEN=\${POCKETDRIVE_UPDATER_TOKEN}
         volumes:
             - ./data:/data
             - ./config:/config
         depends_on:
             - aria2
+        networks:
+            - default
+            - update-internal
+
+    pocketdrive-updater:
+        image: containrrr/watchtower:1.7.1
+        container_name: pocketdrive-updater
+        labels:
+            com.centurylinklabs.watchtower.enable: "false"
+        restart: unless-stopped
+        command: --http-api-update --http-api-periodic-polls=false --label-enable --cleanup
+        environment:
+            - WATCHTOWER_HTTP_API_TOKEN=\${POCKETDRIVE_UPDATER_TOKEN}
+            - WATCHTOWER_HTTP_API_METRICS=false
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        read_only: true
+        cap_drop: [ALL]
+        security_opt: [no-new-privileges:true]
+        networks:
+            - update-internal
 
     aria2:
         image: p3terx/aria2-pro
@@ -88,6 +118,10 @@ services:
         ports:
             - '6888:6888'
             - '6888:6888/udp'
+
+networks:
+    update-internal:
+        internal: true
 EOF
 
 say "拉取镜像并启动…"

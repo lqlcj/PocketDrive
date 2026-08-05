@@ -27,6 +27,7 @@ import (
 	"pocketdrive/internal/storage"
 	"pocketdrive/internal/thumbs"
 	"pocketdrive/internal/trash"
+	"pocketdrive/internal/updater"
 	"pocketdrive/internal/ytdlp"
 )
 
@@ -95,6 +96,7 @@ func main() {
 	archiveSvc := archive.New(gdb, fileSvc, cloudSvc, authSvc, cfg.DBPath, config.Version)
 	compSvc := components.NewService(comps, gdb, aria2Mgr.Version,
 		func() bool { return !aria2Mgr.Degraded() })
+	updateSvc := updater.New(cfg.UpdaterURL, cfg.UpdaterToken)
 
 	srv := server.New(cfg, server.Deps{
 		Auth:       authSvc,
@@ -110,6 +112,7 @@ func main() {
 		Cloud:      cloudSvc,
 		Archive:    archiveSvc,
 		Components: compSvc,
+		Updater:    updateSvc,
 	})
 
 	// docker stop 会发 SIGTERM:把正在传的请求收完再退,别让用户的

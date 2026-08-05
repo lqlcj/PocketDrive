@@ -3,10 +3,12 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
     CloudDownload,
     FolderOpen,
+    Github,
     Link2,
     LogOut,
     Menu,
     Moon,
+    HardDrive,
     Settings,
     Sun,
     TreePalm,
@@ -32,10 +34,13 @@ const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }>
     { to: '/video', label: 'yt下载', icon: Youtube },
     { to: '/shares', label: '分享管理', icon: Link2 },
     { to: '/trash', label: '垃圾桶', icon: Trash2 },
+    { to: '/storage-settings', label: '储存策略', icon: HardDrive },
     { to: '/settings', label: '设置', icon: Settings },
 ];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
+    const location = useLocation();
+
     return (
         <nav className="flex flex-col gap-0.5">
             {NAV.map((n) => (
@@ -47,7 +52,9 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
                     className={({ isActive }) =>
                         cn(
                             'flex items-center gap-2.5 px-3.5 py-2 rounded-full font-bold text-sm transition-colors',
-                            isActive ? 'bg-leaf text-white' : 'text-ink hover:bg-paper-2',
+                            isActive || (n.to === '/storage-settings' && location.pathname === '/storage')
+                                ? 'bg-leaf text-white'
+                                : 'text-ink hover:bg-paper-2',
                         )
                     }
                 >
@@ -94,7 +101,16 @@ export default function Layout({
             <div className="flex-1 overflow-y-auto mt-4 -mx-1 px-1">
                 <NavList onNavigate={() => setMobileOpen(false)} />
             </div>
-            <div className="pt-3 border-t border-line/70 flex items-center gap-2 px-2">
+            <a
+                href="https://github.com/lqlcj/PocketDrive"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-bold text-ink transition-colors hover:bg-paper-2"
+            >
+                <Github className="size-4" />
+                <span>PocketDrive</span>
+            </a>
+            <div className="mt-2 pt-3 border-t border-line/70 flex items-center gap-2 px-2">
                 <Avatar profile={profile} size="sm" />
                 <span className="flex-1 text-sm font-bold truncate">{profile.user}</span>
                 <Button variant="ghost" size="sm" onClick={logout} aria-label="退出登录">

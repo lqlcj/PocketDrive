@@ -71,6 +71,13 @@ export interface YtdlpSettings {
     playerClient: string;
 }
 
+export interface YtdlpCookieStatus {
+    valid: boolean;
+    message: string;
+    cookieCount: number;
+    authCount: number;
+}
+
 export interface YtdlpTask {
     id: number;
     url: string;
@@ -349,8 +356,12 @@ export const api = {
         post<{ ok: boolean; quota: number }>('/api/v1/storage/quota', { quotaGB }),
 
     components: () =>
-        req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),    installComponent: (kind: string) =>
+        req<{ components: ComponentInfo[]; managed: boolean }>('/api/v1/components'),
+    installComponent: (kind: string) =>
         post<{ ok: boolean; version: string }>('/api/v1/components/install', { kind }),
+    updateStatus: () => req<{ enabled: boolean; version: string }>('/api/v1/system/update'),
+    triggerUpdate: (password: string) =>
+        post<{ ok: boolean; version: string }>('/api/v1/system/update', { password }),
 
     /** 错误日志:只记 error,每天清空 */
     logs: () =>
@@ -431,12 +442,13 @@ export const api = {
             hasCookies: boolean;
             cookiesUpdated: string;
             cookiesSupported: boolean;
+            cookieStatus: YtdlpCookieStatus;
         }>('/api/v1/ytdlp/settings'),
     saveYtdlpSettings: (s: YtdlpSettings) =>
         post<{ ok: boolean }>('/api/v1/ytdlp/settings', s),
     /** content 传空串 = 删除已保存的 cookies */
     setYtdlpCookies: (content: string) =>
-        post<{ ok: boolean; hasCookies: boolean; cookiesUpdated: string }>(
+        post<{ ok: boolean; hasCookies: boolean; cookiesUpdated: string; cookieStatus: YtdlpCookieStatus }>(
             '/api/v1/ytdlp/cookies',
             { content },
         ),

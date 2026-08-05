@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/lqlcj/PocketDrive/main/scripts/inst
 ```
 
 脚本会自动:装 docker(如果没有)→ 建 `/opt/pocketdrive` → 生成随机密码和 aria2 RPC 密钥 →
-拉起 pocketdrive + aria2 两个容器。装完直接打印访问地址和密码。
+拉起 pocketdrive、aria2 和隔离的更新器容器。装完直接打印访问地址和密码。
 重跑同一条命令即为升级(数据、密码不动)。
 
 ### 方式二:1Panel 编排安装
@@ -71,6 +71,8 @@ services:
     pocketdrive:
         image: ghcr.io/lqlcj/pocketdrive:latest
         container_name: pocketdrive
+        labels:
+            com.centurylinklabs.watchtower.enable: "true"
         restart: unless-stopped
         init: true
         ports:
@@ -83,11 +85,35 @@ services:
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
             - POCKETDRIVE_ARIA2_SECRET=改成你的rpc密钥
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
+            - POCKETDRIVE_UPDATER_URL=http://pocketdrive-updater:8080
+            - POCKETDRIVE_UPDATER_TOKEN=改成随机长密钥
         volumes:
             - ./data:/data
             - ./config:/config
         depends_on:
             - aria2
+        networks:
+            - default
+            - update-internal
+
+    # 不对公网开放,只接受 PocketDrive 的内部带 Token 请求
+    pocketdrive-updater:
+        image: containrrr/watchtower:1.7.1
+        container_name: pocketdrive-updater
+        labels:
+            com.centurylinklabs.watchtower.enable: "false"
+        restart: unless-stopped
+        command: --http-api-update --http-api-periodic-polls=false --label-enable --cleanup
+        environment:
+            - WATCHTOWER_HTTP_API_TOKEN=改成随机长密钥
+            - WATCHTOWER_HTTP_API_METRICS=false
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        read_only: true
+        cap_drop: [ALL]
+        security_opt: [no-new-privileges:true]
+        networks:
+            - update-internal
 
     aria2:
         image: p3terx/aria2-pro
@@ -111,11 +137,15 @@ services:
         ports:
             - '6888:6888'
             - '6888:6888/udp'
+
+networks:
+    update-internal:
+        internal: true
 ```
 
-3. 改掉两处密码/密钥(**两个 `rpc密钥` 必须填成同一个值**)→ **确认**。
+3. 改掉登录密码、RPC 密钥和更新器随机长密钥(**两个 `rpc密钥` 必须填成同一个值;更新器 Token 的两处也必须一致**)→ **确认**。
    之后在 1Panel 的防火墙页放行 `16688`(以及可选的 `6888`)。
-4. 升级:编排详情页「拉取镜像并重建」即可,数据在编排目录的 `data/` 里。
+4. 进入 PocketDrive → 设置,输入当前密码后点击「检查并升级」即可。若更新器未配置,仍可在编排详情页「拉取镜像并重建」,数据在编排目录的 `data/` 里。
    yt-dlp 不随镜像走,在网页设置页里单独升级。
 
 ### 方式三:git clone 后 compose 构建
@@ -125,6 +155,7 @@ git clone https://github.com/lqlcj/PocketDrive && cd PocketDrive/docker
 cat > .env <<'EOF'
 ARIA2_SECRET=换成你的rpc密钥
 POCKETDRIVE_ADMIN_PASSWORD=换成你的登录密码
+POCKETDRIVE_UPDATER_TOKEN=换成至少32位的随机密钥
 EOF
 # 默认拉官方镜像;想本地构建就按 docker-compose.yml 顶部注释切换 build 模式
 docker compose up -d
@@ -139,9 +170,16 @@ WebDAV 地址:`http://VPS_IP:16688/dav/`,账号密码与网页登录相同。
 
 ### 升级
 
+配置了隔离更新器的 1Panel 编排,可直接在 **网页 → 设置 → PocketDrive 更新**
+点击按钮。按钮会要求再次输入当前密码,更新器只拉取带
+`com.centurylinklabs.watchtower.enable=true` 标签的 PocketDrive 镜像,不会暴露
+更新接口或 Docker Socket 到公网。更新期间网页会短暂断开,数据卷和配置不受影响。
+
+如果没有配置 `POCKETDRIVE_UPDATER_TOKEN`,按钮会禁用,请使用下面的手动命令:
+
 ```bash
 cd /opt/pocketdrive          # 一键安装的默认目录
-docker compose pull          # 拉新镜像(pocketdrive 与 aria2)
+docker compose pull          # 拉新镜像
 docker compose up -d
 ```
 
@@ -229,6 +267,19 @@ docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
 | `POCKETDRIVE_BIN_BUNDLED` | 空 | 镜像内置的 yt-dlp 副本目录,首次启动时复制进上面那个目录;已存在则不覆盖,免得把用户升级过的版本盖回去 |
 
 ## 本机开发(Windows)
+
+本机开发不会自动托管外部组件。使用「yt下载」前请先安装并确保下面两个命令能在
+PowerShell 中执行（安装后需重启终端）：
+
+```powershell
+winget install yt-dlp.yt-dlp
+winget install Gyan.FFmpeg.Shared
+yt-dlp --version
+ffmpeg -version
+```
+
+如果不使用 `winget`，也可以把 `yt-dlp.exe` 和 `ffmpeg.exe` 所在目录加入系统 `PATH`。
+页面顶部显示“yt-dlp 不可用”时，任务不会被加入队列，先处理这里的依赖即可。
 
 ```powershell
 # 终端 1:后端(:16688)

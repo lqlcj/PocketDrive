@@ -14,6 +14,7 @@ import SharesPage from './pages/SharesPage';
 import Trash from './pages/Trash';
 import Settings from './pages/Settings';
 import StoragePage from './pages/StoragePage';
+import StorageSettings from './pages/StorageSettings';
 import SharePage from './pages/SharePage';
 import UploadPanel from './components/UploadPanel';
 import MusicPlayer from './components/MusicPlayer';
@@ -54,6 +55,10 @@ function Private({
                         <Route path="/shares" element={<SharesPage />} />
                         <Route path="/trash" element={<Trash />} />
                         <Route path="/storage" element={<StoragePage />} />
+                        <Route
+                            path="/storage-settings"
+                            element={<StorageSettings profile={profile} />}
+                        />
                         <Route
                             path="/settings"
                             element={<Settings profile={profile} onProfile={onProfile} />}

@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +50,14 @@ var playerClients = map[string]bool{
 	"ios":          true,
 	"android_vr":   true,
 	"web_embedded": true,
+}
+
+// 这些客户端不支持账号 cookies。选中它们时 yt-dlp 即使收到了
+// --cookies 也不能用里面的登录态通过 YouTube 验证。
+var noAccountCookieClients = map[string]bool{
+	"tv_simply":  true,
+	"ios":        true,
+	"android_vr": true,
 }
 
 var proxySchemes = map[string]bool{
@@ -102,22 +111,75 @@ func (m *Manager) cookiePath() string {
 	return filepath.Join(m.confDir, cookieFile)
 }
 
-func (m *Manager) cookieInfo() (bool, string) {
+type cookieStatus struct {
+	Valid       bool   `json:"valid"`
+	Message     string `json:"message"`
+	CookieCount int    `json:"cookieCount"`
+	AuthCount   int    `json:"authCount"`
+}
+
+func (m *Manager) cookieInfo() (bool, string, cookieStatus) {
 	p := m.cookiePath()
 	if p == "" {
-		return false, ""
+		return false, "", cookieStatus{Message: "当前部署没有配置目录"}
 	}
 	fi, err := os.Stat(p)
 	if err != nil || fi.Size() == 0 {
-		return false, ""
+		return false, "", cookieStatus{Message: "未配置 cookies"}
 	}
-	return true, fi.ModTime().Format(time.RFC3339)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return true, fi.ModTime().Format(time.RFC3339), cookieStatus{Message: "cookies 文件读取失败"}
+	}
+	return true, fi.ModTime().Format(time.RFC3339), inspectCookies(string(b), time.Now())
 }
 
 // netscapeHeader 是 yt-dlp 认 cookie 文件的必要条件:少了这一行它会
 // 直接报 "does not look like a Netscape format cookies file"。浏览器
 // 插件导出的文件基本都带,少数会漏,这里补上而不是把用户挡回去。
 const netscapeHeader = "# Netscape HTTP Cookie File"
+
+var youtubeAuthCookies = map[string]bool{
+	"SID": true, "HSID": true, "SSID": true, "APISID": true, "SAPISID": true,
+	"__Secure-1PAPISID": true, "__Secure-3PAPISID": true, "LOGIN_INFO": true,
+}
+
+// inspectCookies 只统计域名、名称和过期时间，不保存也不返回 cookie 值。
+func inspectCookies(raw string, now time.Time) cookieStatus {
+	var st cookieStatus
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#HttpOnly_") {
+			line = strings.TrimPrefix(line, "#HttpOnly_")
+		} else if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue
+		}
+		domain := strings.TrimPrefix(strings.ToLower(fields[0]), ".")
+		if !strings.HasSuffix(domain, "youtube.com") && !strings.HasSuffix(domain, "google.com") {
+			continue
+		}
+		st.CookieCount++
+		expires, _ := strconv.ParseInt(fields[4], 10, 64)
+		active := expires == 0 || expires > now.Unix()
+		if active && youtubeAuthCookies[fields[5]] {
+			st.AuthCount++
+		}
+	}
+	switch {
+	case st.CookieCount == 0:
+		st.Message = "文件里没有 youtube.com/google.com 的 cookies"
+	case st.AuthCount == 0:
+		st.Message = "有 YouTube cookies，但没有未过期的登录凭据；请登录后重新导出"
+	default:
+		st.Valid = true
+		st.Message = "检测到可用的 YouTube 登录凭据"
+	}
+	return st
+}
 
 // normalizeCookies 校验并补全 cookie 文本。判定标准取最宽松的一条:
 // 至少有一行是 tab 分隔的 7 段。
@@ -140,6 +202,10 @@ func normalizeCookies(raw string) (string, error) {
 	if !ok {
 		return "", errors.New("这不像 Netscape 格式的 cookies.txt(每行应是 tab 分隔的 7 段)。" +
 			"请用浏览器的 cookies.txt 导出插件另存,不要复制网页上的文字")
+	}
+	status := inspectCookies(raw, time.Now())
+	if !status.Valid {
+		return "", errors.New(status.Message)
 	}
 	if !strings.HasPrefix(raw, netscapeHeader) {
 		raw = netscapeHeader + "\n" + raw
@@ -168,12 +234,13 @@ func (m *Manager) runCookies() string {
 // ---- HTTP handlers ----
 
 func (m *Manager) HandleGetSettings(w http.ResponseWriter, r *http.Request) {
-	has, at := m.cookieInfo()
+	has, at, status := m.cookieInfo()
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"settings":         m.Settings(),
 		"hasCookies":       has,
 		"cookiesUpdated":   at,
 		"cookiesSupported": m.confDir != "",
+		"cookieStatus":     status,
 	})
 }
 
@@ -228,8 +295,8 @@ func (m *Manager) HandleSetCookies(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusInternalServerError, "保存失败: "+err.Error())
 		return
 	}
-	has, at := m.cookieInfo()
+	has, at, status := m.cookieInfo()
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"ok": true, "hasCookies": has, "cookiesUpdated": at,
+		"ok": true, "hasCookies": has, "cookiesUpdated": at, "cookieStatus": status,
 	})
 }

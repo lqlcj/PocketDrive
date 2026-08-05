@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { YtdlpTask, YtdlpSettings } from '../api';
+import type { YtdlpTask, YtdlpSettings, YtdlpCookieStatus } from '../api';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input, NativeSelect, Checkbox } from '../components/ui/input';
@@ -68,6 +68,7 @@ function Advanced() {
     const [settings, setSettings] = useState<YtdlpSettings>({ proxy: '', playerClient: '' });
     const [hasCookies, setHasCookies] = useState(false);
     const [cookiesUpdated, setCookiesUpdated] = useState('');
+    const [cookieStatus, setCookieStatus] = useState<YtdlpCookieStatus | null>(null);
     const [supported, setSupported] = useState(true);
     const [cookieText, setCookieText] = useState('');
     const [busy, setBusy] = useState(false);
@@ -79,6 +80,7 @@ function Advanced() {
                 setSettings(r.settings);
                 setHasCookies(r.hasCookies);
                 setCookiesUpdated(r.cookiesUpdated);
+                setCookieStatus(r.cookieStatus);
                 setSupported(r.cookiesSupported);
             })
             .catch(() => undefined);
@@ -106,6 +108,7 @@ function Advanced() {
             const r = await api.setYtdlpCookies(content);
             setHasCookies(r.hasCookies);
             setCookiesUpdated(r.cookiesUpdated ?? '');
+            setCookieStatus(r.cookieStatus ?? null);
             setCookieText('');
             toast.success(content.trim() ? 'cookies 已保存' : 'cookies 已删除');
         } catch (e) {
@@ -145,26 +148,47 @@ function Advanced() {
                 <div className="mt-3 flex flex-col gap-4">
                     <div>
                         <div className="text-sm font-bold mb-1">YouTube cookies</div>
-                        <p className="text-xs text-ink-soft mb-2 leading-relaxed">
-                            报「Sign in to confirm you're not a bot」是因为 YouTube
-                            把机房 IP 当成了机器人,传一份 cookies 就能过。做法:用浏览器的
-                            cookies.txt 导出插件,在
-                            <b>无痕窗口</b>登录 YouTube 后打开{' '}
-                            <code className="bg-paper-2 rounded px-1">
-                                youtube.com/robots.txt
-                            </code>
-                            ,导出 youtube.com 的 cookies,然后<b>关掉那个无痕窗口</b>
-                            (不关的话 YouTube 会把这份 cookie 轮换掉)。建议用小号。
-                        </p>
+                        <div className="text-xs text-ink-soft mb-2 leading-relaxed space-y-1.5">
+                            <p>
+                                报「Sign in to confirm you're not a bot」时,需要把一个已登录
+                                YouTube 的浏览器会话导出给 VPS。Cookie 等同于登录凭据,建议使用小号,
+                                不要把文件发给任何人。
+                            </p>
+                            <p className="font-bold text-ink">Chrome / Edge(推荐)</p>
+                            <ol className="list-decimal pl-4 space-y-0.5">
+                                <li>在浏览器扩展商店搜索并安装 <b>Get cookies.txt LOCALLY</b>。只安装这个名称的本地导出插件,不要安装会把 cookies 上传到第三方的插件。</li>
+                                <li>打开无痕窗口,登录 YouTube,确认网页右上角能看到头像;建议不要使用日常主账号。</li>
+                                <li>在同一个无痕窗口打开 <code className="bg-paper-2 rounded px-1">https://www.youtube.com/robots.txt</code>。</li>
+                                <li>点击插件图标,选择导出当前站点/包含子域名,格式保持 Netscape,下载得到 <code className="bg-paper-2 rounded px-1">cookies.txt</code>。不要复制浏览器开发者工具里的 Cookie 字符串。</li>
+                                <li>回到这里点击“选择 cookies.txt”上传,看到“检测到可用的 YouTube 登录凭据”后再添加任务。</li>
+                            </ol>
+                            <p className="font-bold text-ink">Firefox</p>
+                            <ol className="list-decimal pl-4 space-y-0.5">
+                                <li>在 Firefox 附加组件商店搜索 <b>cookies.txt</b>,选择能够“导出 Netscape cookies.txt”的扩展。</li>
+                                <li>在新建的隐私窗口登录 YouTube,打开上面的 <code className="bg-paper-2 rounded px-1">robots.txt</code> 页面,从扩展菜单导出当前站点 cookies。</li>
+                                <li>上传导出的文件,不要改文件内容或另存为 CSV/JSON。</li>
+                            </ol>
+                            <p>
+                                导出后立即关闭无痕窗口,再使用本页上传。YouTube 可能会轮换无痕会话的
+                                Cookie,不关闭窗口就继续使用会导致刚导出的文件很快失效。播放器客户端请先保持
+                                “默认”; <b>ios、android_vr、tv_simply 不支持账号 cookies</b>。
+                            </p>
+                            <p>
+                                如果页面提示“没有未过期的登录凭据”,说明导出的是网页文字、未登录会话或已过期文件;
+                                重新按上面步骤导出。如果页面显示凭据有效但 VPS 仍收到机器人验证,通常是 Cookie
+                                与 VPS 出口 IP/地区不一致,需要在下方配置与浏览器同地区的 HTTP/SOCKS5 代理。
+                            </p>
+                        </div>
                         <div className="text-xs mb-2">
                             {!supported ? (
                                 <span className="text-ink-soft">
                                     当前部署没有配置目录,存不了 cookies
                                 </span>
                             ) : hasCookies ? (
-                                <span className="text-leaf-dark">
+                                <span className={cookieStatus?.valid ? 'text-leaf-dark' : 'text-danger'}>
                                     已保存
                                     {cookiesUpdated && `(${formatTime(cookiesUpdated)})`}
+                                    {cookieStatus?.message && `：${cookieStatus.message}`}
                                 </span>
                             ) : (
                                 <span className="text-ink-soft">未配置</span>
@@ -401,6 +425,7 @@ export default function VideoDL() {
                 open={pickerOpen}
                 initial={dir}
                 hideMounts
+                allowCreate
                 onClose={() => setPickerOpen(false)}
                 onSelect={setDir}
             />
