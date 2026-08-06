@@ -20,7 +20,6 @@ import (
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/icons"
 	"pocketdrive/internal/index"
-	"pocketdrive/internal/logs"
 	"pocketdrive/internal/server"
 	"pocketdrive/internal/share"
 	"pocketdrive/internal/storage"
@@ -33,10 +32,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-
-	// 错误日志和 DB 放一起(容器里就是 /config 卷),重启不丢。
-	// 只记 error、每天清空,详见 internal/logs。
-	logs.Init(filepath.Join(filepath.Dir(cfg.DBPath), "logs"))
 
 	// 导入进来的配置库在这里顶替正式库——必须赶在 db.Open 之前
 	if err := archive.RestorePendingImport(cfg.DBPath); err != nil {

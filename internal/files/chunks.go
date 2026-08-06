@@ -406,7 +406,7 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if fi, err := out.Stat(); err == nil {
-		s.addUsage(fi.Size())
+		s.AddUsage(fi.Size())
 	}
 	if err := out.Close(); err != nil {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())

@@ -306,12 +306,6 @@ export const api = {
     saveLocalQuota: (quotaGB: number) =>
         post<{ ok: boolean; quota: number }>('/api/v1/storage/quota', { quotaGB }),
 
-    /** 错误日志:只记 error,每天清空 */
-    logs: () =>
-        req<{ enabled: boolean; text: string; size: number }>('/api/v1/logs'),
-    clearLogs: () => post<{ ok: boolean }>('/api/v1/logs/clear', {}),
-    logsDownloadUrl: () => '/api/v1/logs/download',
-
     avatarUrl: (version: string) =>
         `/api/v1/public/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`,
     uploadAvatar: async (file: File) => {

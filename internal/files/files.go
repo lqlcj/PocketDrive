@@ -53,7 +53,7 @@ func (s *Service) checkLocal(size int64) error {
 	return s.space.CheckLocal(size)
 }
 
-func (s *Service) addUsage(delta int64) {
+func (s *Service) AddUsage(delta int64) {
 	if s.space != nil {
 		s.space.AddUsage(delta)
 	}
@@ -265,20 +265,18 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 配额是软限制:知道还剩多少时,用 MaxBytesReader 把请求体限制在剩余
+	// 额度内。必须先包好 Body 再 MultipartReader——Go 1.21+ 里对同一个
+	// Request 第二次调用 MultipartReader 会报 "called twice"。
+	if mnt == nil && s.space != nil {
+		if limit := s.space.UploadLimit(); limit > 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, limit+1<<20)
+		}
+	}
 	mr, err := r.MultipartReader()
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, "需要 multipart 上传")
 		return
-	}
-	if mnt == nil && s.space != nil {
-		if limit := s.space.UploadLimit(); limit > 0 {
-			r.Body = http.MaxBytesReader(w, r.Body, limit+1<<20)
-			mr, err = r.MultipartReader()
-			if err != nil {
-				httpx.Err(w, http.StatusBadRequest, "需要 multipart 上传")
-				return
-			}
-		}
 	}
 	var saved []string
 	for {
@@ -318,11 +316,10 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			n, err := s.savePart(path.Join(dir, name), part)
 			if err != nil {
 				part.Close()
-				httpx.ErrLog(w, r, http.StatusInternalServerError, "files",
-					"保存上传文件失败", err)
+httpx.Err(w, http.StatusInternalServerError, "保存上传文件失败")
 				return
 			}
-			s.addUsage(n)
+			s.AddUsage(n)
 		}
 		part.Close()
 		saved = append(saved, name)
@@ -488,7 +485,7 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.addUsage(int64(len(req.Content)))
+	s.AddUsage(int64(len(req.Content)))
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

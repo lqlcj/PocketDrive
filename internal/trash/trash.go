@@ -121,6 +121,7 @@ func (s *Service) permDelete(item *db.TrashItem) error {
 	if err := s.files.Root().RemoveAll(path.Join(trashDir, item.TrashKey)); err != nil {
 		return err
 	}
+	s.files.AddUsage(-item.Size)
 	return s.db.Delete(&db.TrashItem{}, item.ID).Error
 }
 

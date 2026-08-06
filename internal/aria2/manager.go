@@ -18,7 +18,6 @@ import (
 
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
-	"pocketdrive/internal/logs"
 )
 
 // Manager keeps aria2 task state mirrored in SQLite so history survives
@@ -188,7 +187,6 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	t.ErrorMsg = friendlyErr(st.ErrorMessage)
 	// 同一个任务每 2 秒同步一次,只在报错第一次出现时记,别刷屏
 	if t.ErrorMsg != "" && t.ErrorMsg != prevErr {
-		logs.Errorf("aria2", "任务 %s(%s)失败: %s", t.GID, t.URL, t.ErrorMsg)
 	}
 	if name := statusName(st); name != "" {
 		t.Name = name

@@ -25,7 +25,6 @@ import (
 	"github.com/anacrolix/torrent"
 
 	"pocketdrive/internal/db"
-	"pocketdrive/internal/logs"
 )
 
 // magnetConvertTimeout 给元数据取数的时间上限。前端弹框的磁力超时是
@@ -111,7 +110,6 @@ func (m *Manager) startMagnetConvert(oldGID, magnet, relDir, hash string) {
 			j.running = false
 			j.lastErrAt = time.Now()
 			m.magnetMu.Unlock()
-			logs.Errorf("aria2", "磁力转种子失败(%s…): %v", hash[:8], err)
 			return
 		}
 		// 成功:跑完 finishMagnet(迁移记录)后再摘掉 job
@@ -212,7 +210,6 @@ func (m *Manager) finishMagnet(oldGID, magnet, relDir, torrentB64, name string) 
 	opts["pause"] = "true" // 先挂起,等前端弹框勾选文件后再开始
 	newGID, err := m.c.AddTorrent(torrentB64, opts)
 	if err != nil {
-		logs.Errorf("aria2", "磁力转种子后添加任务失败(%s): %v", oldGID, err)
 		return false // 留着原磁力任务(挂起),等下次重试
 	}
 	// 让 aria2 忘掉磁力元数据任务,免得它 follow 完再迁出一条重复任务
@@ -229,6 +226,5 @@ func (m *Manager) finishMagnet(oldGID, magnet, relDir, torrentB64, name string) 
 	}
 	m.db.Create(&nt)
 	m.db.Delete(&db.DownloadTask{}, "gid = ?", oldGID)
-	logs.Errorf("aria2", "磁力转种子成功:%s → %s", name, newGID)
 	return true
 }

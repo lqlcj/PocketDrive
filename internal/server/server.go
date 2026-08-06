@@ -137,12 +137,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/admin/export", d.Archive.HandleExport)
 	api.HandleFunc("POST /api/v1/admin/import", d.Archive.HandleImport)
 
-	// 错误日志:只记 error、每天清空,供出问题时回看
-	api.HandleFunc("GET /api/v1/logs", handleLogs)
-	api.HandleFunc("POST /api/v1/logs/clear", handleLogsClear)
-	api.HandleFunc("GET /api/v1/logs/download", handleLogsDownload)
-
-	api.HandleFunc("GET /api/v1/downloads", d.Aria2.HandleList)
+	// 档案:压缩/解压是异步任务;整盘导出导入用于换 VPS 迁移
 	api.HandleFunc("POST /api/v1/downloads", d.Aria2.HandleAdd)
 	api.HandleFunc("POST /api/v1/downloads/torrent", d.Aria2.HandleAddTorrent)
 	api.HandleFunc("GET /api/v1/downloads/{gid}/files", d.Aria2.HandleTorrentFiles)
@@ -167,7 +162,6 @@ func New(cfg *config.Config, d Deps) *http.Server {
 		ReadTimeout:       15 * time.Minute,
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
-		// observe 在最外层:CSRF 自己也可能 panic 或返回 5xx
 		Handler: securityHeaders(observe(auth.CSRF(mux))),
 	}
 }
