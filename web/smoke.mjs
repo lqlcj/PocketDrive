@@ -1,6 +1,6 @@
 // 冒烟 v6(v0.5):动画登录页→文件页(主页)→目录树/图标(⋯ 菜单)→md 预览→
 // xlsx 预览→压缩/解压→直链→分享管理→离线下载(种子上传入口)→下载设置→
-// yt(播放列表开关)→储存策略(最近修改/WebDAV)→设置(资料/容量/组件状态/备份迁移)→搜索→
+// 储存策略(策略管理)→设置(资料/最近修改/容量/WebDAV/组件状态)→搜索→
 // 黑夜模式→直链免登录验证
 //
 // 注意:会往 ../data 写测试文件(note.md / test.xlsx / music/rock),
@@ -118,8 +118,15 @@ await page.click('button:has-text("完成")');
 await page.click('a:has-text("分享管理")');
 await page.waitForSelector('text=直链', { timeout: 10000 });
 
-// 离线下载页:种子上传入口
+// 离线下载页:种子上传入口 + 下载列表接口必须成功
+const downloadsResponsePromise = page.waitForResponse(
+    (resp) => resp.request().method() === 'GET' && resp.url().endsWith('/api/v1/downloads'),
+);
 await page.click('a:has-text("离线下载")');
+const downloadsResponse = await downloadsResponsePromise;
+if (!downloadsResponse.ok()) {
+    errors.push(`DOWNLOAD LIST HTTP ${downloadsResponse.status()}`);
+}
 await page.waitForSelector('button:has-text("上传种子")', { timeout: 10000 });
 await page.waitForTimeout(400);
 await page.screenshot({ path: `${OUT}/44-downloads.png` });
@@ -128,24 +135,19 @@ await page.screenshot({ path: `${OUT}/44-downloads.png` });
 await page.click('a:has-text("下载设置")');
 await page.waitForSelector('text=最大同时下载数', { timeout: 10000 });
 
-// yt下载页:播放列表开关
-await page.click('a:has-text("yt下载")');
-await page.waitForSelector('text=整个播放列表批量下载', { timeout: 10000 });
-await page.waitForTimeout(400);
-await page.screenshot({ path: `${OUT}/45-ytdl.png` });
-
-// 储存策略页:最近修改 + 存储策略 + WebDAV
+// 储存策略菜单直达策略管理主内容页
 await page.click('a:has-text("储存策略") >> nth=0');
-await page.waitForSelector('text=最近修改', { timeout: 10000 });
-await page.waitForSelector('text=WebDAV', { timeout: 5000 });
+await page.waitForSelector('text=VPS 磁盘,支持全部功能', { timeout: 10000 });
+await page.waitForSelector('button:has-text("添加 S3/R2 存储")', { timeout: 5000 });
 
-// 设置页:紧凑资料卡 + 容量 + 组件状态 + 备份迁移
+// 设置页:资料 + 最近修改 + 容量 + WebDAV + 组件状态
 await page.click('a:has-text("设置") >> nth=0');
 await page.waitForSelector('text=个人资料', { timeout: 10000 });
 await page.waitForSelector('text=修改密码', { timeout: 5000 });
+await page.waitForSelector('text=最近修改', { timeout: 5000 });
 await page.waitForSelector('text=仓库容量', { timeout: 5000 });
+await page.waitForSelector('text=WebDAV', { timeout: 5000 });
 await page.waitForSelector('text=组件状态', { timeout: 5000 });
-await page.waitForSelector('text=备份与迁移', { timeout: 5000 });
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${OUT}/46-settings.png` });
 

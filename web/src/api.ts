@@ -56,6 +56,7 @@ export interface TorrentFile {
     index: number;
     path: string;
     length: number;
+    selected: boolean;
 }
 
 export interface Share {
@@ -109,6 +110,7 @@ export interface DownloadSettings {
     maxUploadLimit: string;
     seedTimeMin: number;
     trackerAuto: boolean;
+    customTrackers: string;
     defaultDir: string;
 }
 
@@ -287,13 +289,21 @@ export const api = {
     downloadSettings: () =>
         req<{
             settings: DownloadSettings;
+            aria2Version: string;
             trackerCount: number;
+            trackerAutoCount: number;
+            trackerCustomCount: number;
             trackerUpdatedAt: string;
+            trackerSource: string;
+            trackerLastError: string;
         }>('/api/v1/downloads/settings'),
     saveDownloadSettings: (s: DownloadSettings) =>
-        post<{ ok: boolean }>('/api/v1/downloads/settings', s),
+        post<{ ok: boolean; settings: DownloadSettings }>('/api/v1/downloads/settings', s),
     updateTrackers: () =>
-        post<{ ok: boolean; count: number }>('/api/v1/downloads/trackers/update', {}),
+        post<{ ok: boolean; count: number; source: string; updatedAt: string }>(
+            '/api/v1/downloads/trackers/update',
+            {},
+        ),
 
     storage: () =>
         req<{

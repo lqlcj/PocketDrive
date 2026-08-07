@@ -7,7 +7,7 @@ import { api } from '../api';
 import type { DownloadSettings as DS } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { NativeSelect, Checkbox } from '../components/ui/input';
+import { NativeSelect, Checkbox, Textarea } from '../components/ui/input';
 import FolderPicker from '../components/FolderPicker';
 import { formatTime } from '../util';
 
@@ -31,8 +31,13 @@ const SEED_TIMES = [
 
 export default function DownloadSettings() {
     const [s, setS] = useState<DS | null>(null);
+    const [aria2Version, setAria2Version] = useState('');
     const [trackerCount, setTrackerCount] = useState(0);
+    const [trackerAutoCount, setTrackerAutoCount] = useState(0);
+    const [trackerCustomCount, setTrackerCustomCount] = useState(0);
     const [trackerAt, setTrackerAt] = useState('');
+    const [trackerSource, setTrackerSource] = useState('');
+    const [trackerError, setTrackerError] = useState('');
     const [pickerOpen, setPickerOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [updating, setUpdating] = useState(false);
@@ -41,8 +46,13 @@ export default function DownloadSettings() {
         api.downloadSettings()
             .then((r) => {
                 setS(r.settings);
+                setAria2Version(r.aria2Version);
                 setTrackerCount(r.trackerCount);
+                setTrackerAutoCount(r.trackerAutoCount);
+                setTrackerCustomCount(r.trackerCustomCount);
                 setTrackerAt(r.trackerUpdatedAt);
+                setTrackerSource(r.trackerSource);
+                setTrackerError(r.trackerLastError);
             })
             .catch((e) => toast.error(e instanceof Error ? e.message : '加载失败'));
     }, []);
@@ -51,7 +61,16 @@ export default function DownloadSettings() {
         if (!s) return;
         setSaving(true);
         try {
-            await api.saveDownloadSettings(s);
+            const saved = await api.saveDownloadSettings(s);
+            setS(saved.settings);
+            const latest = await api.downloadSettings();
+            setAria2Version(latest.aria2Version);
+            setTrackerCount(latest.trackerCount);
+            setTrackerAutoCount(latest.trackerAutoCount);
+            setTrackerCustomCount(latest.trackerCustomCount);
+            setTrackerAt(latest.trackerUpdatedAt);
+            setTrackerSource(latest.trackerSource);
+            setTrackerError(latest.trackerLastError);
             toast.success('已保存并即时应用到 aria2');
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '保存失败');
@@ -64,10 +83,29 @@ export default function DownloadSettings() {
         setUpdating(true);
         try {
             const r = await api.updateTrackers();
-            setTrackerCount(r.count);
-            setTrackerAt(new Date().toISOString());
+            const latest = await api.downloadSettings();
+            setS(latest.settings);
+            setTrackerCount(latest.trackerCount);
+            setTrackerAutoCount(latest.trackerAutoCount);
+            setTrackerCustomCount(latest.trackerCustomCount);
+            setTrackerAt(r.updatedAt);
+            setTrackerSource(r.source);
+            setTrackerError('');
             toast.success(`已更新 ${r.count} 条 tracker`);
         } catch (e) {
+            // 后端会保留旧缓存并记录各镜像源的失败原因；即使本次请求
+            // 返回 502，也立即刷新状态让用户看见“旧列表仍在使用”。
+            try {
+                const latest = await api.downloadSettings();
+                setTrackerCount(latest.trackerCount);
+                setTrackerAutoCount(latest.trackerAutoCount);
+                setTrackerCustomCount(latest.trackerCustomCount);
+                setTrackerAt(latest.trackerUpdatedAt);
+                setTrackerSource(latest.trackerSource);
+                setTrackerError(latest.trackerLastError);
+            } catch {
+                // 保留当前页面状态，原始更新错误仍会通过 toast 显示。
+            }
             toast.error(e instanceof Error ? e.message : '更新失败');
         } finally {
             setUpdating(false);
@@ -77,6 +115,15 @@ export default function DownloadSettings() {
     if (!s) {
         return <div className="text-center text-ink-soft py-16">加载中…</div>;
     }
+
+    const trackerSourceLabel = (() => {
+        if (!trackerSource) return '';
+        try {
+            return new URL(trackerSource).host;
+        } catch {
+            return trackerSource;
+        }
+    })();
 
     const row = (label: string, control: ReactNode, hint?: string) => (
         <div className="py-2.5 border-b border-line/50 last:border-b-0">
@@ -101,6 +148,9 @@ export default function DownloadSettings() {
 
             <Card>
                 <CardTitle>全局(保存后即时生效,无需重启 aria2)</CardTitle>
+                <p className="text-xs text-ink-soft mb-2">
+                    下载引擎：{aria2Version ? `原版 aria2 ${aria2Version}` : 'aria2 暂时不可达'}
+                </p>
                 {row(
                     '最大同时下载数',
                     <NativeSelect
@@ -171,14 +221,38 @@ export default function DownloadSettings() {
                             {updating ? '更新中…' : '立即更新'}
                         </Button>
                         <span className="text-xs text-ink-soft">
-                            当前 {trackerCount} 条
+                            生效 {trackerCount} 条 · 自动列表 {trackerAutoCount} 条 · 自定义{' '}
+                            {trackerCustomCount} 条
                             {trackerAt && ` · ${formatTime(trackerAt)} 更新`}
+                            {trackerSourceLabel && ` · 来源 ${trackerSourceLabel}`}
                         </span>
                     </div>,
-                    '磁力任务自动附带最新 tracker,冷门资源更容易连上',
+                    '原版 aria2 不负责定时抓取列表；PocketDrive 每日从三个镜像源依次更新，首次启动与更新失败时保留兜底/旧列表',
+                )}
+                {trackerError && (
+                    <p className="text-xs text-danger mt-1.5 break-all">
+                        最近一次自动更新失败（旧列表仍在使用）：{trackerError}
+                    </p>
+                )}
+                {row(
+                    '自定义 Tracker',
+                    <div className="w-full max-w-2xl">
+                        <Textarea
+                            rows={5}
+                            spellCheck={false}
+                            maxLength={64 * 1024}
+                            value={s.customTrackers}
+                            onChange={(e) => setS({ ...s, customTrackers: e.target.value })}
+                            placeholder={'每行一条，例如：\nudp://tracker.example.com:6969/announce\nhttps://tracker.example.com/announce'}
+                            className="font-mono text-xs"
+                        />
+                    </div>,
+                    '支持 http、https、udp；自动去重。即使关闭每日自动更新，自定义列表仍会附加到新 BT 任务',
                 )}
                 <p className="text-xs text-ink-soft mt-2">
-                    DHT / IPv6 等属于 aria2 启动项,由 aria2 侧配置(Docker 版默认已开 DHT)。
+                    项目维护的 aria2 镜像默认开启 IPv4 DHT、PEX，并持久化 DHT 路由表；
+                    如服务器具备公网 IPv6，可在部署目录的 .env 设置
+                    ARIA2_ENABLE_DHT6=true 后重建容器。
                 </p>
             </Card>
 
@@ -194,7 +268,7 @@ export default function DownloadSettings() {
                     </Button>
                 </div>
                 <p className="text-xs text-ink-soft mt-2">
-                    离线下载和 yt下载新建任务时默认使用这个目录
+                    离线下载新建任务时默认使用这个目录
                 </p>
             </Card>
 

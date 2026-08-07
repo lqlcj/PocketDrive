@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -117,12 +119,56 @@ func (s *Service) restore(item *db.TrashItem) error {
 	return s.db.Delete(&db.TrashItem{}, item.ID).Error
 }
 
+func (s *Service) itemDiskSize(item *db.TrashItem) (int64, error) {
+	name := path.Join(trashDir, item.TrashKey)
+	var total int64
+	err := fs.WalkDir(s.files.Root().FS(), name, func(p string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		// 与 storage.refreshUsage 保持同一口径:点开头的内部文件不计入配额。
+		if strings.HasPrefix(path.Base(p), ".") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 func (s *Service) permDelete(item *db.TrashItem) error {
+	size := item.Size
+	if actual, err := s.itemDiskSize(item); err == nil {
+		size = actual
+		// 先把真实大小存下来:若文件删除成功但 DB 删除暂时失败,
+		// 下次重试仍能准确修正容量缓存。
+		if actual != item.Size {
+			if err := s.db.Model(item).Update("size", actual).Error; err != nil {
+				return err
+			}
+			item.Size = actual
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	if err := s.files.Root().RemoveAll(path.Join(trashDir, item.TrashKey)); err != nil {
 		return err
 	}
-	s.files.AddUsage(-item.Size)
-	return s.db.Delete(&db.TrashItem{}, item.ID).Error
+	if err := s.db.Delete(&db.TrashItem{}, item.ID).Error; err != nil {
+		return err
+	}
+	s.files.AddUsage(-size)
+	return nil
 }
 
 // ---- HTTP handlers ----

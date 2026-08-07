@@ -18,7 +18,6 @@ const SharesPage = lazy(() => import('./pages/SharesPage'));
 const Trash = lazy(() => import('./pages/Trash'));
 const Settings = lazy(() => import('./pages/Settings'));
 const StoragePage = lazy(() => import('./pages/StoragePage'));
-const StorageSettings = lazy(() => import('./pages/StorageSettings'));
 const SharePage = lazy(() => import('./pages/SharePage'));
 
 function SuspenseWrap({ children }: { children: React.ReactNode }) {
@@ -69,7 +68,7 @@ function Private({
                         <Route path="/storage" element={<SuspenseWrap><StoragePage /></SuspenseWrap>} />
                         <Route
                             path="/storage-settings"
-                            element={<SuspenseWrap><StorageSettings profile={profile} /></SuspenseWrap>}
+                            element={<Navigate to="/storage" replace />}
                         />
                         <Route
                             path="/settings"

@@ -32,13 +32,11 @@ const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }>
     { to: '/downloads', label: '离线下载', icon: CloudDownload, end: true },
     { to: '/shares', label: '分享管理', icon: Link2 },
     { to: '/trash', label: '垃圾桶', icon: Trash2 },
-    { to: '/storage-settings', label: '储存策略', icon: HardDrive },
+    { to: '/storage', label: '储存策略', icon: HardDrive, end: true },
     { to: '/settings', label: '设置', icon: Settings },
 ];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
-    const location = useLocation();
-
     return (
         <nav className="flex flex-col gap-0.5">
             {NAV.map((n) => (
@@ -50,9 +48,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
                     className={({ isActive }) =>
                         cn(
                             'flex items-center gap-2.5 px-3.5 py-2 rounded-full font-bold text-sm transition-colors',
-                            isActive || (n.to === '/storage-settings' && location.pathname === '/storage')
-                                ? 'bg-leaf text-white'
-                                : 'text-ink hover:bg-paper-2',
+                            isActive ? 'bg-leaf text-white' : 'text-ink hover:bg-paper-2',
                         )
                     }
                 >

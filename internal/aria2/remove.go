@@ -95,7 +95,7 @@ func (m *Manager) filesOf(t *db.DownloadTask) []string {
 }
 
 // deleteFiles 删掉任务产出的文件,并把因此空掉的目录收拾干净
-//（BT 种子通常会建一层以种子名命名的文件夹)。
+// （BT 种子通常会建一层以种子名命名的文件夹)。
 // 返回删掉的条目数。
 func (m *Manager) deleteFiles(paths []string, taskDir string) int {
 	n := 0
@@ -126,13 +126,8 @@ func (m *Manager) deleteFiles(paths []string, taskDir string) int {
 
 // RemoveTask 删除任务记录,withFiles 为真时连已下载的文件一起删。
 func (m *Manager) RemoveTask(gid string, withFiles bool) (int, error) {
-	// 磁力链可能拿着元数据 gid,先解析到当前真实 gid 再动手
+	// 磁力链可能拿着元数据 gid，先解析到当前真实 gid 再动手。
 	cur := m.resolveGID(gid)
-	// 磁力转种子的后台任务也一并忘掉(记录删了,finishMagnet 自然会空手而归)
-	m.magnetMu.Lock()
-	delete(m.magnetJobs, gid)
-	delete(m.magnetJobs, cur)
-	m.magnetMu.Unlock()
 	var t db.DownloadTask
 	if err := m.db.Where("gid = ? OR follows = ?", cur, gid).First(&t).Error; err != nil {
 		// resolveGID 只靠 aria2 翻到了新 gid、库里还没迁移(元数据刚

@@ -387,6 +387,7 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	oldSize := s.localFileSize(p)
 	out, err := s.root.Create(p)
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, err.Error())
@@ -405,13 +406,15 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	newSize := oldSize
 	if fi, err := out.Stat(); err == nil {
-		s.AddUsage(fi.Size())
+		newSize = fi.Size()
 	}
 	if err := out.Close(); err != nil {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.AddUsage(newSize - oldSize)
 	_ = os.RemoveAll(dir)
 	s.db.Delete(&db.UploadSession{}, "id = ?", us.ID)
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})

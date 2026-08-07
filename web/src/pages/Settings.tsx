@@ -5,8 +5,8 @@ import type { Profile } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Dialog, DialogContent, DialogFooter } from '../components/ui/dialog';
 import Avatar from '../components/Avatar';
+import StorageSettingsCards from '../components/StorageSettingsCards';
 
 export default function Settings({
     profile,
@@ -25,12 +25,6 @@ export default function Settings({
     // 头像:上传图片存在配置目录,不进网盘
     const avatarInput = useRef<HTMLInputElement>(null);
     const [avatarBusy, setAvatarBusy] = useState(false);
-
-    // 导入会覆盖现有网盘,要二次确认并验密码
-    const importInput = useRef<HTMLInputElement>(null);
-    const [importFile, setImportFile] = useState<File | null>(null);
-    const [importPass, setImportPass] = useState('');
-    const [importing, setImporting] = useState(false);
 
     // 资料 + 密码一个按钮保存:改了哪部分就提交哪部分
     const save = async () => {
@@ -102,28 +96,13 @@ export default function Settings({
         }
     };
 
-    const doImport = async () => {
-        if (!importFile) return;
-        setImporting(true);
-        try {
-            const r = await api.importBackup(importFile, importPass);
-            toast.success(`已恢复 ${r.files} 个文件`, { description: r.note, duration: 10000 });
-            setImportFile(null);
-            setImportPass('');
-        } catch (e) {
-            toast.error(e instanceof Error ? e.message : '导入失败');
-        } finally {
-            setImporting(false);
-        }
-    };
-
     return (
         <div>
             <h2 className="text-xl font-extrabold mb-4">设置</h2>
 
-            {/* 两两成对:同一行的两张卡片等高,底部对齐、间距一致 */}
-            <div className="grid md:grid-cols-2 gap-3">
-                    <Card className="p-3">
+            {/* 手机单列、桌面两列；四张卡片按行等高对齐。 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                    <Card className="h-full p-3 flex flex-col">
                         <CardTitle className="mb-2">个人资料</CardTitle>
                         <div className="flex items-center gap-2.5">
                             <Avatar profile={profile} size="md" />
@@ -193,52 +172,15 @@ export default function Settings({
                             </div>
                         </details>
 
-                        <div className="mt-2.5 flex justify-end">
+                        <div className="mt-auto pt-2.5 flex justify-end">
                             <Button size="sm" variant="primary" disabled={saving} onClick={save}>
                                 {saving ? '保存中…' : '保存'}
                             </Button>
                         </div>
                     </Card>
 
-                    <Card>
-                        <CardTitle>备份与迁移</CardTitle>
-                        <p className="text-sm text-ink-soft mb-2.5">
-                            导出会把网盘文件和配置库(分享链接、下载历史、文件夹图标、
-                            存储策略)打成一个 tar.gz。换 VPS 时在新机器上导入即可。
-                            外部存储(@挂载)的内容不打包,导入后按原策略自动挂上。
-                        </p>
-                        <div className="flex gap-2 flex-wrap">
-                            <a href={api.exportUrl()} download><Button size="sm">导出整盘备份</Button></a>
-                            <input ref={importInput} type="file" accept=".gz,.tgz" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) setImportFile(f); e.target.value = ''; }} />
-                            <Button size="sm" onClick={() => importInput.current?.click()}>从备份导入…</Button>
-                        </div>
-                        <p className="text-xs text-ink-soft mt-2">备份包里含存储策略的密钥,请妥善保管</p>
-                    </Card>
+                    <StorageSettingsCards profile={profile} />
             </div>
-
-            {/* 导入确认:会覆盖现有网盘,所以要验密码 */}
-            <Dialog open={importFile !== null} onOpenChange={(o) => !o && setImportFile(null)}>
-                <DialogContent title="从备份导入">
-                    <p className="text-sm mb-3">
-                        将从「{importFile?.name}」恢复。
-                        <b>同名文件会被覆盖</b>
-                        ,配置库会在重启后整个替换掉现在的。建议先导出一份当前备份。
-                    </p>
-                    <Input
-                        type="password"
-                        placeholder="输入当前登录密码以确认"
-                        value={importPass}
-                        autoComplete="current-password"
-                        onChange={(e) => setImportPass(e.target.value)}
-                    />
-                    <DialogFooter
-                        okText={importing ? '导入中…' : '确认导入'}
-                        okDanger
-                        okLoading={importing}
-                        onOk={doImport}
-                    />
-                </DialogContent>
-            </Dialog>
         </div>
     );
 }

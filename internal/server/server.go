@@ -137,14 +137,8 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/admin/export", d.Archive.HandleExport)
 	api.HandleFunc("POST /api/v1/admin/import", d.Archive.HandleImport)
 
-	// 档案:压缩/解压是异步任务;整盘导出导入用于换 VPS 迁移
-	api.HandleFunc("POST /api/v1/downloads", d.Aria2.HandleAdd)
-	api.HandleFunc("POST /api/v1/downloads/torrent", d.Aria2.HandleAddTorrent)
-	api.HandleFunc("GET /api/v1/downloads/{gid}/files", d.Aria2.HandleTorrentFiles)
-	api.HandleFunc("POST /api/v1/downloads/{gid}/select", d.Aria2.HandleSelectFiles)
-	api.HandleFunc("POST /api/v1/downloads/pause", d.Aria2.HandlePause)
-	api.HandleFunc("POST /api/v1/downloads/unpause", d.Aria2.HandleUnpause)
-	api.HandleFunc("POST /api/v1/downloads/remove", d.Aria2.HandleRemove)
+	// 离线下载
+	registerDownloadRoutes(api, d.Aria2)
 
 	mux.Handle("/api/v1/", d.Auth.Middleware(api))
 
@@ -162,8 +156,19 @@ func New(cfg *config.Config, d Deps) *http.Server {
 		ReadTimeout:       15 * time.Minute,
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
-		Handler: securityHeaders(observe(auth.CSRF(mux))),
+		Handler:           securityHeaders(observe(auth.CSRF(mux))),
 	}
+}
+
+func registerDownloadRoutes(api *http.ServeMux, manager *aria2.Manager) {
+	api.HandleFunc("GET /api/v1/downloads", manager.HandleList)
+	api.HandleFunc("POST /api/v1/downloads", manager.HandleAdd)
+	api.HandleFunc("POST /api/v1/downloads/torrent", manager.HandleAddTorrent)
+	api.HandleFunc("GET /api/v1/downloads/{gid}/files", manager.HandleTorrentFiles)
+	api.HandleFunc("POST /api/v1/downloads/{gid}/select", manager.HandleSelectFiles)
+	api.HandleFunc("POST /api/v1/downloads/pause", manager.HandlePause)
+	api.HandleFunc("POST /api/v1/downloads/unpause", manager.HandleUnpause)
+	api.HandleFunc("POST /api/v1/downloads/remove", manager.HandleRemove)
 }
 
 func securityHeaders(next http.Handler) http.Handler {

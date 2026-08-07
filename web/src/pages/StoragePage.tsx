@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Cloud, HardDrive, Plug, Plus } from 'lucide-react';
+import { Cloud, HardDrive, Plug, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import { formatBytes } from '../util';
@@ -160,11 +160,6 @@ export default function StoragePage() {
             <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <h2 className="text-xl font-extrabold">存储策略</h2>
                 <div className="ml-auto flex gap-2">
-                    <Link to="/storage-settings">
-                        <Button size="sm">
-                            <ArrowLeft className="size-3.5" /> 返回储存策略
-                        </Button>
-                    </Link>
                     <Button variant="primary" size="sm" onClick={openAdd}>
                         <Plus className="size-3.5" /> 添加 S3/R2 存储
                     </Button>

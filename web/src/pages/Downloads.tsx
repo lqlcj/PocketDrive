@@ -56,6 +56,12 @@ export default function Downloads() {
     const [selectQueue, setSelectQueue] = useState<PendingSelect[]>([]);
     const [selectBusy, setSelectBusy] = useState(false);
 
+    const queueSelection = useCallback((item: PendingSelect) => {
+        setSelectQueue((q) =>
+            q.some((pending) => pending.gid === item.gid) ? q : [...q, item],
+        );
+    }, []);
+
     const load = useCallback(() => {
         api.downloads()
             .then((r) => {
@@ -84,7 +90,7 @@ export default function Downloads() {
             setUrl('');
             if (u.startsWith('magnet:')) {
                 // 磁力:任务已进 aria2 拉元数据,弹框等清单出来再让用户勾选
-                setSelectQueue((q) => [...q, { gid: r.task.gid, magnet: true }]);
+                queueSelection({ gid: r.task.gid, magnet: true });
             } else {
                 toast.success('任务已添加');
             }
@@ -111,7 +117,12 @@ export default function Downloads() {
                 const r = await api.addTorrent(b64, f.name, dir, true);
                 queue.push({ gid: r.task.gid, magnet: false });
             }
-            if (queue.length > 0) setSelectQueue((q) => [...q, ...queue]);
+            if (queue.length > 0) {
+                setSelectQueue((q) => [
+                    ...q,
+                    ...queue.filter((item) => !q.some((pending) => pending.gid === item.gid)),
+                ]);
+            }
             load();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '种子任务添加失败');
@@ -250,6 +261,12 @@ export default function Downloads() {
                 <div className="flex flex-col gap-3">
                     {tasks.map((t) => {
                         const s = STATUS[t.status] ?? { text: t.status, tone: 'default' as const };
+                        const isMagnet = t.url.startsWith('magnet:');
+                        // 元数据阶段还没有种子名；真实任务由 pause-metadata
+                        // 保持 paused。刷新页面后可从这里重新打开文件选择器。
+                        const magnetNeedsSelection =
+                            isMagnet &&
+                            (t.status === 'paused' || (t.status === 'active' && !t.name));
                         const pct =
                             t.totalLength > 0
                                 ? (t.completedLength / t.totalLength) * 100
@@ -293,7 +310,7 @@ export default function Downloads() {
                                     </div>
                                 )}
                                 <div className="flex gap-1.5 mt-2.5">
-                                    {t.status === 'active' && (
+                                    {t.status === 'active' && !magnetNeedsSelection && (
                                         <Button
                                             size="sm"
                                             onClick={() => op(() => api.pauseDownload(t.gid))}
@@ -301,7 +318,7 @@ export default function Downloads() {
                                             暂停
                                         </Button>
                                     )}
-                                    {t.status === 'paused' && !t.url.startsWith('magnet:') && (
+                                    {t.status === 'paused' && !isMagnet && (
                                         <Button
                                             size="sm"
                                             onClick={() =>
@@ -309,6 +326,16 @@ export default function Downloads() {
                                             }
                                         >
                                             继续
+                                        </Button>
+                                    )}
+                                    {magnetNeedsSelection && (
+                                        <Button
+                                            size="sm"
+                                            onClick={() =>
+                                                queueSelection({ gid: t.gid, magnet: true })
+                                            }
+                                        >
+                                            {t.status === 'paused' ? '选择文件并继续' : '获取种子信息'}
                                         </Button>
                                     )}
                                     <Button

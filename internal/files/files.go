@@ -59,6 +59,14 @@ func (s *Service) AddUsage(delta int64) {
 	}
 }
 
+func (s *Service) localFileSize(p string) int64 {
+	fi, err := s.root.Stat(p)
+	if err != nil || fi.IsDir() {
+		return 0
+	}
+	return fi.Size()
+}
+
 func New(dataDir, tmpDir string, cloudSvc *cloud.Service, gdb *gorm.DB) (*Service, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
@@ -313,13 +321,13 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 				return
 			}
-			n, err := s.savePart(path.Join(dir, name), part)
+			delta, err := s.savePart(path.Join(dir, name), part)
 			if err != nil {
 				part.Close()
-httpx.Err(w, http.StatusInternalServerError, "保存上传文件失败")
+				httpx.Err(w, http.StatusInternalServerError, "保存上传文件失败")
 				return
 			}
-			s.AddUsage(n)
+			s.AddUsage(delta)
 		}
 		part.Close()
 		saved = append(saved, name)
@@ -328,6 +336,7 @@ httpx.Err(w, http.StatusInternalServerError, "保存上传文件失败")
 }
 
 func (s *Service) savePart(p string, part *multipart.Part) (int64, error) {
+	oldSize := s.localFileSize(p)
 	f, err := s.root.Create(p)
 	if err != nil {
 		return 0, err
@@ -337,7 +346,7 @@ func (s *Service) savePart(p string, part *multipart.Part) (int64, error) {
 		f.Close()
 		return 0, err
 	}
-	return n, f.Close()
+	return n - oldSize, f.Close()
 }
 
 func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
@@ -461,9 +470,13 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	if err := s.checkLocal(int64(len(req.Content))); err != nil {
-		httpx.Err(w, http.StatusInsufficientStorage, err.Error())
-		return
+	oldSize := s.localFileSize(p)
+	delta := int64(len(req.Content)) - oldSize
+	if delta > 0 {
+		if err := s.checkLocal(delta); err != nil {
+			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+			return
+		}
 	}
 	if dir := path.Dir(p); dir != "." {
 		if err := s.root.MkdirAll(dir, 0o755); err != nil {
@@ -485,7 +498,7 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.AddUsage(int64(len(req.Content)))
+	s.AddUsage(delta)
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

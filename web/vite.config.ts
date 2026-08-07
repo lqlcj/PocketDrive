@@ -20,7 +20,7 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks(id) {
-                    if (id.includes('node_modules/react-router-dom')) return 'vendor-router';
+                    if (id.includes('node_modules/react-router')) return 'vendor-router';
                     if (id.includes('node_modules/lucide-react')) return 'vendor-icons';
                     if (id.includes('node_modules/react-markdown') || id.includes('node_modules/remark-gfm')) return 'vendor-markdown';
                     if (id.includes('node_modules/@radix-ui')) return 'vendor-radix';

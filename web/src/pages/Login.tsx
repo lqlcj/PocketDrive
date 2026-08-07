@@ -65,7 +65,7 @@ export default function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
                     />
                 </div>
                 <div className="relative z-10 text-[13px] text-ink-soft">
-                    口袋网盘 
+                    口袋网盘
                 </div>
                 {/* 氛围光斑 */}
                 <div className="absolute top-[18%] right-[12%] size-64 rounded-full bg-leaf/15 blur-[80px]" />

@@ -7,7 +7,7 @@ import { formatBytes } from '../util';
 
 export interface PendingSelect {
     gid: string;
-    /** 磁力链:先加任务再等元数据,期间前端轮询文件清单并先暂停 */
+    /** 磁力链:aria2 先取元数据,真实下载由 pause-metadata 保持暂停 */
     magnet: boolean;
 }
 
@@ -15,8 +15,8 @@ export interface PendingSelect {
  * 「选完再下」的文件勾选弹框。
  *
  * 种子上传:addTorrent(paused=true) 后任务已挂起,这里拉一次文件清单即可。
- * 磁力链:任务已在跑元数据(只有几 KB),轮询到真实文件后先 pause,再让
- * 用户勾选;确认后由父组件调 selectDownloadFiles 下发 select-file 并恢复。
+ * 磁力链:aria2 正在获取元数据(只有几 KB),生成的真实任务会自动暂停；
+ * 用户勾选后由父组件下发 select-file 并恢复。
  */
 export default function DownloadFileSelect({
     item,
@@ -66,19 +66,20 @@ export default function DownloadFileSelect({
                     setTimeout(poll, 1000);
                     return;
                 }
-                // 磁力:元数据就绪立刻暂停,等用户勾选完再恢复
+                // pause-metadata 已保证真实任务暂停；再补一次 pause 作为兼容兜底。
                 if (item.magnet) {
                     await api.pauseDownload(item.gid).catch(() => undefined);
                     if (cancelled) return;
                 }
-                setFiles(r.files);
+                setFiles(real);
                 setName(r.name);
-                setChecked(new Set(r.files.map((f) => f.index)));
+                setChecked(new Set(real.filter((f) => f.selected).map((f) => f.index)));
                 setLoading(false);
             } catch {
                 if (cancelled) return;
-                setLoading(false);
-                setFailed(true);
+                // followedBy gid 迁移或 aria2 短暂重连时偶尔会有一次 RPC
+                // 失败；在总时限内继续轮询，不让弹窗因为瞬时错误直接终止。
+                setTimeout(poll, 1000);
             }
         };
         poll();
@@ -133,9 +134,9 @@ export default function DownloadFileSelect({
                     </span>
                     {item.magnet && elapsed >= 15 && (
                         <span className="text-xs max-w-md text-center leading-relaxed">
-                            元数据由 PocketDrive 自己用 tracker 列表 + DHT 拉取,
-                            通常几十秒内完成。迟迟拿不到多半是磁力没人做种,
-                            或磁力里带的 tracker 已经失效。
+                            元数据由 aria2 通过 tracker + DHT 获取，通常几十秒内完成。
+                            迟迟拿不到多半是磁力没人持有元数据、tracker 失效，
+                            或服务器的 BT 网络受限。
                         </span>
                     )}
                 </div>
@@ -149,8 +150,8 @@ export default function DownloadFileSelect({
                     </span>
                     {item.magnet && (
                         <span className="text-xs max-w-md text-center leading-relaxed">
-                            建议:如果这个磁力一直没人做种,换用 .torrent 种子文件
-                            上传通常更快;或确认服务器能出网(tracker 需要外连)。
+                            建议:到下载设置更新 Tracker 后移除并重新添加该磁力，
+                            同时确认 6888(TCP+UDP) 已放行；仍失败时换用 .torrent 文件。
                         </span>
                     )}
                     <div className="flex gap-2">

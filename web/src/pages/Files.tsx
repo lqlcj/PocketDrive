@@ -207,7 +207,7 @@ function Thumb({
     if (!dir && !inMount && (kind === 'image' || kind === 'video') && !failed) {
         return (
             <img
-                className="w-full h-28 object-cover bg-paper-2"
+                className="w-full h-20 sm:h-28 object-cover bg-paper-2"
                 src={api.thumbUrl(path)}
                 alt={name}
                 loading="lazy"
@@ -220,18 +220,18 @@ function Thumb({
     }
     if (dir && name.startsWith('@')) {
         return (
-            <div className="w-full h-28 flex items-center justify-center bg-paper-2">
-                <Cloud className="size-10 text-sky-600 dark:text-sky-400" />
+            <div className="w-full h-20 sm:h-28 flex items-center justify-center bg-paper-2">
+                <Cloud className="size-8 sm:size-10 text-sky-600 dark:text-sky-400" />
             </div>
         );
     }
     return (
-        <div className="w-full h-28 flex items-center justify-center bg-paper-2">
+        <div className="w-full h-20 sm:h-28 flex items-center justify-center bg-paper-2">
             <EntryIcon
                 kind={kind}
                 custom={dir ? dirIcon : undefined}
-                className="size-10"
-                emojiClassName="text-4xl"
+                className="size-8 sm:size-10"
+                emojiClassName="text-3xl sm:text-4xl"
             />
         </div>
     );
@@ -1320,94 +1320,97 @@ export default function Files() {
                                     const on = selected.has(e.name);
                                     const drop = folderDrop(e);
                                     return (
-                                    <ContextMenu key={e.name}>
-                                        <ContextMenuTrigger asChild>
-                                            <div
-                                                ref={e.name === flash ? flashRef : undefined}
-                                                // 批量模式下原生拖拽整个让位给拉框:
-                                                // 两者抢同一个手势,不可能都留着
-                                                draggable={!isMountRoot(e) && !selectMode}
-                                                data-sel={isMountRoot(e) ? undefined : e.name}
-                                                onDragStart={(ev) => onRowDragStart(ev, e)}
-                                                onDragEnd={onRowDragEnd}
-                                                onClick={
-                                                    selectMode
-                                                        ? (ev) => onRowPick(ev, e, idx)
-                                                        : undefined
-                                                }
-                                                {...drop.handlers}
-                                                title={drop.rejectWhy ?? undefined}
-                                                className={cn(
-                                                    // sm 以上必须 nowrap:名字项的 basis 是内容宽度,
-                                                    // 一旦超过容器宽度,flex-wrap 会让它独占一行(而不是
-                                                    // 收缩),大小/时间/操作被挤到第二行,整行就被撑高了。
-                                                    // 手机上仍然换行——那边本来就是名字一行、操作一行。
-                                                    'group/row flex items-center gap-2.5 px-3 py-2.5 sm:py-1.5 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 flex-wrap sm:flex-nowrap select-none transition-opacity',
-                                                    on && 'bg-leaf-soft/60',
-                                                    e.name === flash && 'pd-flash',
-                                                    selectMode &&
-                                                        !isMountRoot(e) &&
-                                                        'cursor-pointer',
-                                                    drop.active &&
-                                                        'bg-leaf-soft outline-2 outline-dashed outline-leaf -outline-offset-2',
-                                                    // 拖着东西路过放不进去的文件夹时压暗一点
-                                                    dragging !== null &&
-                                                        e.dir &&
-                                                        !drop.droppable &&
-                                                        'opacity-45',
-                                                    moving.has(e.name) &&
-                                                        'opacity-40 pointer-events-none',
-                                                )}
-                                            >
-                                                {iconCell(e, idx)}
-                                                <button
-                                                    className="flex items-center gap-2 flex-1 min-w-0 basis-full sm:basis-auto font-bold text-left cursor-pointer truncate"
-                                                    // 批量模式下什么都不做,让点击冒泡到整行去处理
-                                                    onClick={(ev) =>
-                                                        !selectMode && onEntryClick(ev, e, idx)
+                                        <ContextMenu key={e.name}>
+                                            <ContextMenuTrigger asChild>
+                                                <div
+                                                    ref={
+                                                        e.name === flash ? flashRef : undefined
                                                     }
-                                                    onMouseEnter={() =>
-                                                        !selectMode && hoverFolder(e)
+                                                    // 批量模式下原生拖拽整个让位给拉框:
+                                                    // 两者抢同一个手势,不可能都留着
+                                                    draggable={!isMountRoot(e) && !selectMode}
+                                                    data-sel={
+                                                        isMountRoot(e) ? undefined : e.name
                                                     }
-                                                    title={
+                                                    onDragStart={(ev) => onRowDragStart(ev, e)}
+                                                    onDragEnd={onRowDragEnd}
+                                                    onClick={
                                                         selectMode
-                                                            ? e.name
-                                                            : e.dir
-                                                              ? `${e.name}(可把文件拖进来)`
-                                                              : e.name
+                                                            ? (ev) => onRowPick(ev, e, idx)
+                                                            : undefined
                                                     }
+                                                    {...drop.handlers}
+                                                    title={drop.rejectWhy ?? undefined}
+                                                    className={cn(
+                                                        // 全尺寸保持单行；名字靠 min-w-0 截断，避免手机端
+                                                        // 把操作按钮挤到第二行后显得过高。
+                                                        'group/row flex items-center flex-nowrap gap-1.5 px-2 py-1.5 sm:gap-2.5 sm:px-3 border-b border-line/50 last:border-b-0 hover:bg-paper-2/60 select-none transition-opacity',
+                                                        on && 'bg-leaf-soft/60',
+                                                        e.name === flash && 'pd-flash',
+                                                        selectMode &&
+                                                            !isMountRoot(e) &&
+                                                            'cursor-pointer',
+                                                        drop.active &&
+                                                            'bg-leaf-soft outline-2 outline-dashed outline-leaf -outline-offset-2',
+                                                        // 拖着东西路过放不进去的文件夹时压暗一点
+                                                        dragging !== null &&
+                                                            e.dir &&
+                                                            !drop.droppable &&
+                                                            'opacity-45',
+                                                        moving.has(e.name) &&
+                                                            'opacity-40 pointer-events-none',
+                                                    )}
                                                 >
-                                                    <span className="truncate">{e.name}</span>
-                                                </button>
-                                                <span className="text-xs text-ink-soft w-20 text-right hidden sm:block shrink-0">
-                                                    {e.dir ? '-' : formatBytes(e.size)}
-                                                </span>
-                                                <span className="text-xs text-ink-soft w-28 text-right hidden xl:block shrink-0">
-                                                    {formatTime(e.mtime)}
-                                                </span>
-                                                {actions(e)}
-                                            </div>
-                                        </ContextMenuTrigger>
-                                        <ContextMenuContent>
-                                            {rowActions(e).map((a) => (
-                                                <Fragment key={a.label}>
-                                                    {a.sepBefore && <ContextMenuSeparator />}
-                                                    <ContextMenuItem
-                                                        danger={a.danger}
-                                                        onSelect={a.run}
+                                                    {iconCell(e, idx)}
+                                                    <button
+                                                        className="flex items-center gap-2 flex-1 min-w-0 font-bold text-left cursor-pointer truncate"
+                                                        // 批量模式下什么都不做,让点击冒泡到整行去处理
+                                                        onClick={(ev) =>
+                                                            !selectMode &&
+                                                            onEntryClick(ev, e, idx)
+                                                        }
+                                                        onMouseEnter={() =>
+                                                            !selectMode && hoverFolder(e)
+                                                        }
+                                                        title={
+                                                            selectMode
+                                                                ? e.name
+                                                                : e.dir
+                                                                  ? `${e.name}(可把文件拖进来)`
+                                                                  : e.name
+                                                        }
                                                     >
-                                                        {a.label}
-                                                    </ContextMenuItem>
-                                                </Fragment>
-                                            ))}
-                                        </ContextMenuContent>
-                                    </ContextMenu>
+                                                        <span className="truncate">{e.name}</span>
+                                                    </button>
+                                                    <span className="text-xs text-ink-soft w-20 text-right hidden sm:block shrink-0">
+                                                        {e.dir ? '-' : formatBytes(e.size)}
+                                                    </span>
+                                                    <span className="text-xs text-ink-soft w-28 text-right hidden xl:block shrink-0">
+                                                        {formatTime(e.mtime)}
+                                                    </span>
+                                                    {actions(e)}
+                                                </div>
+                                            </ContextMenuTrigger>
+                                            <ContextMenuContent>
+                                                {rowActions(e).map((a) => (
+                                                    <Fragment key={a.label}>
+                                                        {a.sepBefore && <ContextMenuSeparator />}
+                                                        <ContextMenuItem
+                                                            danger={a.danger}
+                                                            onSelect={a.run}
+                                                        >
+                                                            {a.label}
+                                                        </ContextMenuItem>
+                                                    </Fragment>
+                                                ))}
+                                            </ContextMenuContent>
+                                        </ContextMenu>
                                     );
                                 })}
                             </div>
                         ) : (
                             <div
-                                className="relative grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 p-3"
+                                className="relative grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2 p-2 sm:gap-2.5 sm:p-3"
                                 ref={listRef}
                                 {...marqueeProps}
                             >
@@ -1417,92 +1420,100 @@ export default function Files() {
                                     const on = selected.has(e.name);
                                     const drop = folderDrop(e);
                                     return (
-                                    <ContextMenu key={e.name}>
-                                        <ContextMenuTrigger asChild>
-                                            <div
-                                                ref={e.name === flash ? flashRef : undefined}
-                                                draggable={!isMountRoot(e) && !selectMode}
-                                                data-sel={isMountRoot(e) ? undefined : e.name}
-                                                onDragStart={(ev) => onRowDragStart(ev, e)}
-                                                onDragEnd={onRowDragEnd}
-                                                onClick={
-                                                    selectMode
-                                                        ? (ev) => onRowPick(ev, e, idx)
-                                                        : undefined
-                                                }
-                                                {...drop.handlers}
-                                                title={drop.rejectWhy ?? undefined}
-                                                className={cn(
-                                                    'group/card relative rounded-lg border border-line/70 overflow-hidden bg-paper flex flex-col select-none transition-opacity',
-                                                    on && 'border-leaf ring-2 ring-leaf/40',
-                                                    e.name === flash && 'pd-flash',
-                                                    selectMode &&
-                                                        !isMountRoot(e) &&
-                                                        'cursor-pointer',
-                                                    drop.active && 'border-leaf bg-leaf-soft',
-                                                    dragging !== null &&
-                                                        e.dir &&
-                                                        !drop.droppable &&
-                                                        'opacity-45',
-                                                    moving.has(e.name) &&
-                                                        'opacity-40 pointer-events-none',
-                                                )}
-                                            >
-                                                {!(selectMode && isMountRoot(e)) && (
-                                                    <span
-                                                        className={cn(
-                                                            'absolute left-1.5 top-1.5 z-10 transition-opacity',
-                                                            on || coarse || selectMode
-                                                                ? 'opacity-100'
-                                                                : 'opacity-0 group-hover/card:opacity-100',
-                                                        )}
-                                                    >
-                                                        {selectBox(e, idx, on)}
-                                                    </span>
-                                                )}
-                                                <button
-                                                    className="cursor-pointer text-left"
-                                                    // 批量模式下交给整张卡片处理,这里不重复 toggle
-                                                    onClick={(ev) =>
-                                                        !selectMode && onEntryClick(ev, e, idx)
+                                        <ContextMenu key={e.name}>
+                                            <ContextMenuTrigger asChild>
+                                                <div
+                                                    ref={
+                                                        e.name === flash ? flashRef : undefined
                                                     }
-                                                    onMouseEnter={() =>
-                                                        !selectMode && hoverFolder(e)
+                                                    draggable={!isMountRoot(e) && !selectMode}
+                                                    data-sel={
+                                                        isMountRoot(e) ? undefined : e.name
                                                     }
-                                                    title={e.name}
+                                                    onDragStart={(ev) => onRowDragStart(ev, e)}
+                                                    onDragEnd={onRowDragEnd}
+                                                    onClick={
+                                                        selectMode
+                                                            ? (ev) => onRowPick(ev, e, idx)
+                                                            : undefined
+                                                    }
+                                                    {...drop.handlers}
+                                                    title={drop.rejectWhy ?? undefined}
+                                                    className={cn(
+                                                        'group/card relative rounded-lg border border-line/70 overflow-hidden bg-paper flex flex-col select-none transition-opacity',
+                                                        on && 'border-leaf ring-2 ring-leaf/40',
+                                                        e.name === flash && 'pd-flash',
+                                                        selectMode &&
+                                                            !isMountRoot(e) &&
+                                                            'cursor-pointer',
+                                                        drop.active &&
+                                                            'border-leaf bg-leaf-soft',
+                                                        dragging !== null &&
+                                                            e.dir &&
+                                                            !drop.droppable &&
+                                                            'opacity-45',
+                                                        moving.has(e.name) &&
+                                                            'opacity-40 pointer-events-none',
+                                                    )}
                                                 >
-                                                    <Thumb
-                                                        path={join(e.name)}
-                                                        name={e.name}
-                                                        dir={e.dir}
-                                                        dirIcon={icons[join(e.name)]}
-                                                    />
-                                                    <div className="px-2.5 pt-1.5 font-bold text-xs truncate">
-                                                        {e.name}
-                                                    </div>
-                                                    <div className="px-2.5 pb-1 text-[11px] text-ink-soft">
-                                                        {e.dir ? '文件夹' : formatBytes(e.size)}
-                                                    </div>
-                                                </button>
-                                                <div className="px-1 pb-1.5 flex justify-center">
-                                                    {actions(e)}
-                                                </div>
-                                            </div>
-                                        </ContextMenuTrigger>
-                                        <ContextMenuContent>
-                                            {rowActions(e).map((a) => (
-                                                <Fragment key={a.label}>
-                                                    {a.sepBefore && <ContextMenuSeparator />}
-                                                    <ContextMenuItem
-                                                        danger={a.danger}
-                                                        onSelect={a.run}
+                                                    {!(selectMode && isMountRoot(e)) && (
+                                                        <span
+                                                            className={cn(
+                                                                'absolute left-1.5 top-1.5 z-10 transition-opacity',
+                                                                on || coarse || selectMode
+                                                                    ? 'opacity-100'
+                                                                    : 'opacity-0 group-hover/card:opacity-100',
+                                                            )}
+                                                        >
+                                                            {selectBox(e, idx, on)}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        className="cursor-pointer text-left"
+                                                        // 批量模式下交给整张卡片处理,这里不重复 toggle
+                                                        onClick={(ev) =>
+                                                            !selectMode &&
+                                                            onEntryClick(ev, e, idx)
+                                                        }
+                                                        onMouseEnter={() =>
+                                                            !selectMode && hoverFolder(e)
+                                                        }
+                                                        title={e.name}
                                                     >
-                                                        {a.label}
-                                                    </ContextMenuItem>
-                                                </Fragment>
-                                            ))}
-                                        </ContextMenuContent>
-                                    </ContextMenu>
+                                                        <Thumb
+                                                            path={join(e.name)}
+                                                            name={e.name}
+                                                            dir={e.dir}
+                                                            dirIcon={icons[join(e.name)]}
+                                                        />
+                                                        <div className="px-2.5 pt-1.5 font-bold text-xs truncate">
+                                                            {e.name}
+                                                        </div>
+                                                        <div className="px-2.5 pb-1 text-[11px] leading-tight text-ink-soft">
+                                                            {e.dir
+                                                                ? '文件夹'
+                                                                : formatBytes(e.size)}
+                                                        </div>
+                                                    </button>
+                                                    <div className="absolute right-1 top-1 z-10 rounded-lg bg-paper/90 shadow-sm backdrop-blur-sm sm:static sm:px-1 sm:pb-1.5 sm:flex sm:justify-center sm:bg-transparent sm:shadow-none sm:backdrop-blur-none">
+                                                        {actions(e)}
+                                                    </div>
+                                                </div>
+                                            </ContextMenuTrigger>
+                                            <ContextMenuContent>
+                                                {rowActions(e).map((a) => (
+                                                    <Fragment key={a.label}>
+                                                        {a.sepBefore && <ContextMenuSeparator />}
+                                                        <ContextMenuItem
+                                                            danger={a.danger}
+                                                            onSelect={a.run}
+                                                        >
+                                                            {a.label}
+                                                        </ContextMenuItem>
+                                                    </Fragment>
+                                                ))}
+                                            </ContextMenuContent>
+                                        </ContextMenu>
                                     );
                                 })}
                             </div>

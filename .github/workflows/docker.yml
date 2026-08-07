@@ -1,11 +1,19 @@
-# 推送到 main 或打 v* tag 时,构建多架构镜像发布到 ghcr.io/lqlcj/pocketdrive
-# 首次跑完后,VPS 一键安装脚本和 1Panel 编排就能直接拉镜像,无需在小内存机器上编译
+# 推送到 main、打 v* tag 或每周维护任务时，构建 PocketDrive 与原版 aria2
+# 多架构镜像。aria2 发布前会实际启动容器、验证 RPC/pause-metadata，并下载
+# 一个 HTTPS 文件到共享目录；测试失败不会覆盖 latest。
 name: docker
+
+# 防止定时任务、手动运行和 main 推送同时覆盖 latest。
+concurrency:
+    group: pocketdrive-docker-publish-${{ github.ref }}
+    cancel-in-progress: false
 
 on:
     push:
         branches: [main]
         tags: ['v*']
+    schedule:
+        - cron: '17 3 * * 1'
     workflow_dispatch:
 
 jobs:
@@ -26,21 +34,62 @@ jobs:
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
 
-            - id: meta
+            - id: meta-app
               uses: docker/metadata-action@v5
               with:
                   images: ghcr.io/${{ github.repository_owner }}/pocketdrive
                   tags: |
                       type=raw,value=latest,enable={{is_default_branch}}
                       type=semver,pattern={{version}}
+                      type=sha,format=short,prefix=sha-
 
-            - uses: docker/build-push-action@v6
+            - name: Build and test aria2 images (amd64 + arm64)
+              run: |
+                  for arch in amd64 arm64; do
+                    image="pocketdrive-aria2:smoke-${arch}"
+                    docker buildx build --pull --no-cache \
+                      --platform "linux/${arch}" \
+                      --load \
+                      --build-arg BUILD_REFRESH=${{ github.run_id }} \
+                      -f docker/Dockerfile.aria2 \
+                      -t "${image}" .
+                    bash scripts/smoke-aria2-image.sh "${image}"
+                  done
+
+            - id: meta-aria2
+              uses: docker/metadata-action@v5
+              with:
+                  # 复用现有公开 PocketDrive 包，避免新 GHCR 包首次发布
+                  # 默认为 private，导致一键安装在未登录时无法拉取。
+                  images: ghcr.io/${{ github.repository_owner }}/pocketdrive
+                  tags: |
+                      type=raw,value=aria2-latest,enable={{is_default_branch}}
+                      type=semver,pattern={{version}},prefix=aria2-
+                      type=sha,format=short,prefix=aria2-sha-
+
+            - name: Publish PocketDrive image
+              uses: docker/build-push-action@v6
               with:
                   context: .
                   file: docker/Dockerfile
                   platforms: linux/amd64,linux/arm64
                   push: true
-                  tags: ${{ steps.meta.outputs.tags }}
-                  labels: ${{ steps.meta.outputs.labels }}
-                  cache-from: type=gha
-                  cache-to: type=gha,mode=max
+                  pull: true
+                  tags: ${{ steps.meta-app.outputs.tags }}
+                  labels: ${{ steps.meta-app.outputs.labels }}
+                  cache-from: type=gha,scope=pocketdrive
+                  cache-to: type=gha,mode=max,scope=pocketdrive
+
+            - name: Publish maintained upstream aria2 image
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  file: docker/Dockerfile.aria2
+                  platforms: linux/amd64,linux/arm64
+                  push: true
+                  pull: true
+                  no-cache: true
+                  build-args: |
+                      BUILD_REFRESH=${{ github.run_id }}
+                  tags: ${{ steps.meta-aria2.outputs.tags }}
+                  labels: ${{ steps.meta-aria2.outputs.labels }}

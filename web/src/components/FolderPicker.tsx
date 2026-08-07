@@ -16,7 +16,7 @@ interface Props {
      * (跨存储移动不支持,把选择范围锁在源存储里)。
      */
     rootPath?: string;
-    /** 隐藏 @ 挂载点(离线下载/yt下载只能落本机时用) */
+    /** 隐藏 @ 挂载点(离线下载只能落本机时用) */
     hideMounts?: boolean;
     /** 允许在当前目录创建并选中新文件夹 */
     allowCreate?: boolean;

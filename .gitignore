@@ -7,6 +7,8 @@
 
 # runtime data
 /data/
+/logs/
+/uploads/
 *.db
 *.db-*
 

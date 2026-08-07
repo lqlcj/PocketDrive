@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/lqlcj/PocketDrive/main/scripts/inst
 ```
 
 脚本会自动:装 docker(如果没有)→ 建 `/opt/pocketdrive` → 生成随机密码和 aria2 RPC 密钥 →
-拉起 pocketdrive 和 aria2 容器。装完直接打印访问地址和密码。
+拉起 PocketDrive 和项目自维护的原版 aria2 容器 → 等待健康检查通过并打印实际版本。
 重跑同一条命令即为升级(数据、密码不动)。
 
 开箱即用，`http://IP:16688` 就能访问
@@ -85,25 +85,26 @@ services:
             - ./data:/data
             - ./config:/config
         depends_on:
-            - aria2
+            aria2:
+                condition: service_healthy
     aria2:
-        image: p3terx/aria2-pro
+        image: ghcr.io/lqlcj/pocketdrive:aria2-latest
         container_name: pocketdrive-aria2
         restart: unless-stopped
+        stop_grace_period: 30s
         environment:
             - RPC_SECRET=请填一段随机的 RPC 密钥跟上面相同
-            # BT 监听端口(可选,不开也能下载)
             - LISTEN_PORT=6888
             - MAX_CONCURRENT_DOWNLOADS=3
-            # 这三行不能省:镜像默认让 aria2c 以 nobody(65534)运行,
-            # 写不进 PocketDrive 以 root 建的目录,表现为下载任务报
-            # "Permission denied" 或 "Download aborted."
-            - PUID=0
-            - PGID=0
+            - BT_MAX_PEERS=55
+            - DISK_CACHE=64M
+            # 有公网 IPv6 时可改成 true
+            - ENABLE_DHT6=false
             - UMASK_SET=022
+            - TZ=Asia/Shanghai
         volumes:
             - ./data:/data
-            # 挂出来,容器重启后没下完的任务还能接着下
+            # 会话与 DHT 路由表持久化；从旧 p3terx 镜像升级也沿用此目录
             - ./config/aria2:/config
         ports:
             - '6888:6888'
@@ -160,7 +161,9 @@ docker compose up -d
 
 一键安装的用户重跑安装脚本效果相同,数据和密码不受影响。
 
-这会同时更新 PocketDrive、ffmpeg 和 aria2,不会删除 `data/`、`config/` 中的数据。
+这会同时更新 PocketDrive、ffmpeg 和原版 aria2 镜像，不会删除 `data/`、`config/`
+中的数据。aria2 镜像由本项目每周从 Alpine 官方仓库无缓存重建，发布前会验证
+RPC、`pause-metadata` 和一次真实 HTTPS 下载。
 
 ### 卸载
 
@@ -175,7 +178,7 @@ docker compose down -v
 cd / && rm -rf /opt/pocketdrive
 
 # 3. 顺手清掉镜像(可选)
-docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
+docker rmi ghcr.io/lqlcj/pocketdrive:latest ghcr.io/lqlcj/pocketdrive:aria2-latest
 ```
 
 删之前先在 **设置 → 备份与迁移 → 导出整盘备份** 下载一份,里面有网盘文件和
@@ -204,6 +207,22 @@ docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
 - **离线下载(http/磁力/种子)全部是出站连接**,不需要额外开端口;只有 BT 想要
   更好的连通性时才放行 6888。
 
+## aria2 与 Tracker 维护
+
+- aria2 上游没有官方 Docker 镜像。`ghcr.io/lqlcj/pocketdrive:aria2-latest`
+  不使用 Aria2-Pro 等第三方配置层，直接从 Alpine 当前稳定版的官方 community
+  仓库安装上游 aria2，并只保留 PocketDrive 必需的 RPC、会话、DHT 和资源限制参数。
+  它复用现有公开 GHCR 包的独立 `aria2-*` 标签，因此 VPS 无需额外登录仓库。
+- GitHub Actions 每周重新拉取 Alpine 基础镜像和 aria2 包。新镜像发布前会启动
+  容器、校验 RPC 密钥、验证 `pause-metadata`，再实际下载一个 HTTPS 文件到
+  `/data`；任一步失败都不会覆盖 `latest`。
+- 原版 aria2 只会“使用 Tracker”，不会定时下载公共列表。PocketDrive 会每日
+  从 GitHub Raw、jsDelivr、GitHub Pages 三个镜像依次更新；全部失败时继续使用
+  上一次成功缓存，并在 **下载 → 下载设置** 显示错误。首次缓存尚未建立时会先用
+  3 条内置启动 Tracker，避免刚部署就添加的磁力只能碰运气等待 DHT。
+- 下载设置里可以关闭公共列表，或添加最多 100 条自定义 `http/https/udp`
+  Tracker（每行一条）。自定义项会去重，且在关闭自动更新后仍然生效。
+
 ## 配置(环境变量)
 
 | 变量 | 默认 | 说明 |
@@ -216,6 +235,21 @@ docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
 | `POCKETDRIVE_ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | aria2 的 JSON-RPC 地址。官方 compose 里填 `http://aria2:6800/jsonrpc` 指向 aria2 容器 |
 | `POCKETDRIVE_ARIA2_SECRET` | 必填 | aria2 RPC 密钥,必须和 aria2 容器的 `RPC_SECRET` 填成同一个随机值,不要使用公开示例密钥 |
 | `POCKETDRIVE_ARIA2_DATA_DIR` | 同 DATA_DIR | aria2 进程视角的数据目录路径。两个容器要把网盘目录挂成同一个路径,否则下载完的文件在网盘里找不到 |
+
+aria2 容器可选变量：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `LISTEN_PORT` | `6888` | BT 与 IPv4 DHT 监听端口，需同时映射 TCP/UDP |
+| `MAX_CONCURRENT_DOWNLOADS` | `3` | 启动初值；PocketDrive 连接后会用网页设置覆盖 |
+| `BT_MAX_PEERS` | `55` | 单个 BT 任务最大 Peer 数，兼顾连接率和小内存 VPS |
+| `DISK_CACHE` | `64M` | aria2 磁盘缓存 |
+| `ENABLE_DHT6` | `false` | 服务器有可用公网 IPv6 时可启用 IPv6 DHT |
+| `UMASK_SET` | `022` | 新建文件权限掩码 |
+
+使用本项目 compose 或一键安装脚本时，可在部署目录 `.env` 里写
+`ARIA2_ENABLE_DHT6=true`、`ARIA2_BT_MAX_PEERS=80`、`ARIA2_DISK_CACHE=128M`；
+编排会把它们映射到上表对应的容器变量。
 
 ## 本机开发(Windows)
 
@@ -247,13 +281,18 @@ cd web; npm install; npm run dev
 
 **离线下载报 `Download aborted.`,BT 报 `Failed to make the directory ..., cause: Permission denied`**
 
-aria2 容器写不进网盘目录。`p3terx/aria2-pro` 镜像里 aria2c 固定以 `p3terx`
-用户运行,不设 `PUID`/`PGID` 时它是 **65534(nobody)**;而 PocketDrive 以 root
-建目录(`root:root 0755`),nobody 自然写不进去。`Download aborted.` 是 aria2
-建文件失败时的外层文案,真正的原因不会经 RPC 传出来,所以看着像另一个问题。
+通常是自行修改编排后，PocketDrive 与 aria2 没有把同一个宿主机目录挂到
+`/data`，或修改了容器运行用户。项目维护镜像默认与 PocketDrive 使用相同权限，
+不再需要旧版的 `PUID`/`PGID` 补丁。先运行 `docker compose logs aria2` 看原始原因，
+再对照上面的官方编排恢复两处 `./data:/data`；不确定时直接重跑一键安装脚本。
 
-修法:给 aria2 服务加上 `PUID=0` / `PGID=0` 后 `docker compose up -d`,
-或者直接重跑一次安装脚本(见上面的「方式一:VPS 一键安装」)。
+**磁力一直显示“正在获取种子信息”**
+
+上传 `.torrent` 时元数据已经在文件里；磁力只有哈希，必须从仍持有元数据的 Peer
+获取。先在 **下载设置** 确认自动 Tracker 有列表，或手动点“立即更新”后移除并
+重新添加该磁力，同时确认服务器允许 UDP 出站、6888 TCP/UDP 已放行。若
+Tracker/DHT 都正常仍长期失败，通常是该磁力已经没人持有元数据，只能换
+`.torrent` 文件或其他资源。
 
 **复制按钮点了没反应/提示复制失败**
 
