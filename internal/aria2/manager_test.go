@@ -1,33 +1,29 @@
 package aria2
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	"pocketdrive/internal/db"
 )
 
 // mockAria2 is a minimal aria2 JSON-RPC server for regression tests.
 type mockAria2 struct {
-	t             *testing.T
-	statuses      map[string]*Status // gid -> status
-	added         []string           // uris received by addUri
-	addPaused     []string           // pause option received by addUri
-	addPauseMeta  []string           // pause-metadata option received by addUri
-	dirs          []string
-	torrentPaused []string // pause option received by addTorrent
-	lastSelect    string   // select-file passed to changeOption
-	unpaused      []string // gids passed to aria2.unpause
-	removed       []string // gids passed to aria2.remove
-	nextGID       int
+	t              *testing.T
+	statuses       map[string]*Status // gid -> status
+	added          []string           // uris received by addUri
+	addPaused      []string           // pause option received by addUri
+	dirs           []string
+	torrentPaused  []string // pause option received by addTorrent
+	lastSelect     string   // select-file passed to changeOption
+	unpaused       []string // gids passed to aria2.unpause
+	nextGID        int
 }
 
 func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +65,6 @@ func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
 		m.added = append(m.added, uris[0])
 		m.dirs = append(m.dirs, opts["dir"])
 		m.addPaused = append(m.addPaused, opts["pause"])
-		m.addPauseMeta = append(m.addPauseMeta, opts["pause-metadata"])
 		gid := nextGID()
 		m.statuses[gid] = &Status{GID: gid, Status: "active"}
 		if opts["pause"] == "true" {
@@ -102,13 +97,7 @@ func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		write(st)
-	case "aria2.pause", "aria2.removeDownloadResult":
-		write("ok")
-	case "aria2.remove":
-		var gid string
-		_ = json.Unmarshal(req.Params[1], &gid)
-		m.removed = append(m.removed, gid)
-		delete(m.statuses, gid)
+	case "aria2.pause", "aria2.remove", "aria2.removeDownloadResult":
 		write("ok")
 	case "aria2.unpause":
 		var gid string
@@ -237,8 +226,8 @@ func TestTorrentFiles(t *testing.T) {
 			Name string `json:"name"`
 		}{Name: "mytorrent"}},
 		Files: []File{
-			{Path: "/data/bt/mytorrent/a.mkv", Length: "100", Selected: "true"},
-			{Path: "/data/bt/mytorrent/b.mp4", Length: "200", Selected: "false"},
+			{Path: "/data/bt/mytorrent/a.mkv", Length: "100"},
+			{Path: "/data/bt/mytorrent/b.mp4", Length: "200"},
 		},
 	}
 
@@ -252,10 +241,10 @@ func TestTorrentFiles(t *testing.T) {
 	if len(files) != 2 {
 		t.Fatalf("want 2 files, got %d", len(files))
 	}
-	if files[0].Index != 1 || files[0].Length != 100 || !files[0].Selected {
+	if files[0].Index != 1 || files[0].Length != 100 {
 		t.Fatalf("files[0] = %+v, want index 1 / length 100", files[0])
 	}
-	if files[1].Index != 2 || files[1].Length != 200 || files[1].Selected {
+	if files[1].Index != 2 || files[1].Length != 200 {
 		t.Fatalf("files[1] = %+v, want index 2 / length 200", files[1])
 	}
 }
@@ -263,8 +252,7 @@ func TestTorrentFiles(t *testing.T) {
 func TestMagnetFollowedByMigration(t *testing.T) {
 	m, mock := newTestManager(t)
 
-	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20)
-	task, err := m.Add(magnet, "bt")
+	task, err := m.Add("magnet:?xt=urn:btih:abcdef", "bt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,8 +260,8 @@ func TestMagnetFollowedByMigration(t *testing.T) {
 
 	// 元数据下载完成,真实下载迁移到新 gid
 	mock.statuses["realgid"] = &Status{
-		GID: "realgid", Status: "paused",
-		TotalLength: "2000", CompletedLength: "0",
+		GID: "realgid", Status: "active",
+		TotalLength: "2000", CompletedLength: "100",
 		Bittorrent: &struct {
 			Info *struct {
 				Name string `json:"name"`
@@ -303,9 +291,6 @@ func TestMagnetFollowedByMigration(t *testing.T) {
 	if tasks[0].Follows != metaGID {
 		t.Fatalf("migrated task 应当记下旧 gid(follows),得到 %q", tasks[0].Follows)
 	}
-	if tasks[0].Status != "paused" {
-		t.Fatalf("pause-metadata 生成的真实任务应保持 paused,得到 %q", tasks[0].Status)
-	}
 }
 
 // 磁力元数据就绪后,前端仍拿着旧 gid 轮询文件清单:resolveGID 必须把它
@@ -314,15 +299,14 @@ func TestMagnetFollowedByMigration(t *testing.T) {
 func TestMagnetTorrentFilesViaOldGID(t *testing.T) {
 	m, mock := newTestManager(t)
 
-	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20)
-	task, err := m.Add(magnet, "bt")
+	task, err := m.Add("magnet:?xt=urn:btih:abcdef", "bt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	metaGID := task.GID
 
 	mock.statuses["realgid"] = &Status{
-		GID: "realgid", Status: "paused",
+		GID: "realgid", Status: "active",
 		Bittorrent: &struct {
 			Info *struct {
 				Name string `json:"name"`
@@ -334,7 +318,7 @@ func TestMagnetTorrentFilesViaOldGID(t *testing.T) {
 	}
 	mock.statuses[metaGID] = &Status{
 		GID: metaGID, Status: "complete", FollowedBy: []string{"realgid"},
-		Files: []File{{Path: "/data/bt/[METADATA]" + magnet, Length: "0"}},
+		Files: []File{{Path: "/data/bt/[METADATA]magnet:?xt=urn:btih:abcdef", Length: "0"}},
 	}
 
 	// aria2 已 follow、DB 还没迁移时,拿旧 gid 要能拉到真实文件
@@ -403,9 +387,9 @@ func TestFriendlyErr(t *testing.T) {
 		{"Timeout.", "Timeout."},
 		{
 			"Failed to make the directory /data/x, cause: Permission denied",
-			"./data:/data",
+			"PUID=0",
 		},
-		{"Download aborted.", "docker compose logs aria2"},
+		{"Download aborted.", "PUID=0"},
 	}
 	for _, c := range cases {
 		got := friendlyErr(c.in)
@@ -431,137 +415,6 @@ func TestDefaultDirIsRoot(t *testing.T) {
 	}
 }
 
-func TestTrackerParsingAndTaskOptions(t *testing.T) {
-	m, _ := newTestManager(t)
-	s := defaultSettings()
-	s.CustomTrackers = "UDP://TRACKER.EXAMPLE.COM:6969/announce\n" +
-		"https://tracker.example.com/announce, udp://tracker.example.com:6969/announce"
-	if err := validateSettings(&s); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Count(s.CustomTrackers, "\n") + 1; got != 2 {
-		t.Fatalf("自定义 Tracker 应去重为 2 条,got %d: %q", got, s.CustomTrackers)
-	}
-	badSettings := defaultSettings()
-	badSettings.CustomTrackers = "ftp://tracker.example.com/announce"
-	if validateSettings(&badSettings) == nil {
-		t.Fatal("不受 aria2 支持的 Tracker 协议应被拒绝")
-	}
-
-	auto := "udp://auto.example.com:80/announce\nhttps://tracker.example.com/announce"
-	if err := m.db.Save(&db.Setting{Key: trackersKey, Value: auto}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := m.saveSettings(s); err != nil {
-		t.Fatal(err)
-	}
-	opts := m.taskOpts("", true)
-	list, err := parseTrackerText(opts["bt-tracker"], true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != 3 {
-		t.Fatalf("自动+自定义 Tracker 应去重合并为 3 条,got %v", list)
-	}
-
-	s.TrackerAuto = false
-	if err := m.saveSettings(s); err != nil {
-		t.Fatal(err)
-	}
-	list, err = parseTrackerText(m.taskOpts("", true)["bt-tracker"], true)
-	if err != nil || len(list) != 2 {
-		t.Fatalf("关闭自动更新后仍应使用 2 条自定义 Tracker,got %v,err=%v", list, err)
-	}
-}
-
-func TestBootstrapTrackersBeforeFirstRefresh(t *testing.T) {
-	m, _ := newTestManager(t)
-	if got := m.autoTrackerList(); len(got) != len(bootstrapTrackers) {
-		t.Fatalf("首次更新前应使用 %d 条启动 Tracker,got %v", len(bootstrapTrackers), got)
-	}
-	list, err := parseTrackerText(m.taskOpts("", true)["bt-tracker"], true)
-	if err != nil || len(list) != len(bootstrapTrackers) {
-		t.Fatalf("首次磁力任务应注入启动 Tracker,got %v,err=%v", list, err)
-	}
-}
-
-func TestUpdateTrackersFallbackAndPreserveCache(t *testing.T) {
-	m, _ := newTestManager(t)
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "temporary", http.StatusBadGateway)
-	}))
-	defer bad.Close()
-	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(strings.Join([]string{
-			"# best trackers",
-			"udp://tracker-one.example:80/announce",
-			"https://tracker-two.example/announce",
-			"http://tracker-three.example/announce",
-			"udp://tracker-one.example:80/announce",
-			"not-a-tracker",
-		}, "\n")))
-	}))
-	defer good.Close()
-
-	m.trackerSources = []string{bad.URL, good.URL}
-	n, source, err := m.UpdateTrackers(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 3 || source != good.URL {
-		t.Fatalf("应从第二个源得到 3 条,got n=%d source=%q", n, source)
-	}
-	if got := len(m.autoTrackerList()); got != 3 {
-		t.Fatalf("缓存条数=%d,want 3", got)
-	}
-	if got := m.getSetting(trackersSourceKey); got != good.URL {
-		t.Fatalf("成功来源未记录: %q", got)
-	}
-
-	m.trackerSources = []string{bad.URL}
-	if _, _, err := m.UpdateTrackers(context.Background()); err == nil {
-		t.Fatal("所有源失败时应返回错误")
-	}
-	if got := len(m.autoTrackerList()); got != 3 {
-		t.Fatalf("更新失败不应覆盖旧缓存,got %d", got)
-	}
-	if got := m.getSetting(trackersErrorKey); !strings.Contains(got, "所有 Tracker 更新源均不可用") {
-		t.Fatalf("最近错误未记录: %q", got)
-	}
-}
-
-func TestConcurrentAutomaticTrackerRefreshOnlyFetchesOnce(t *testing.T) {
-	m, _ := newTestManager(t)
-	var hits atomic.Int32
-	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		_, _ = w.Write([]byte(strings.Join([]string{
-			"udp://tracker-one.example:80/announce",
-			"https://tracker-two.example/announce",
-			"http://tracker-three.example/announce",
-		}, "\n")))
-	}))
-	defer source.Close()
-	m.trackerSources = []string{source.URL}
-
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-	for range 2 {
-		go func() {
-			defer wg.Done()
-			<-start
-			m.refreshTrackersIfStale()
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	if got := hits.Load(); got != 1 {
-		t.Fatalf("并发自动更新应只请求一次 Tracker 源,got %d", got)
-	}
-}
-
 // 目标目录由 PocketDrive 预先建好(aria2 容器万一没权限,起码目录是在的),
 // 但 add 失败时不能在用户网盘里留下一个空文件夹。
 func TestEnsureDirOnlyOnSuccess(t *testing.T) {
@@ -581,24 +434,6 @@ func TestEnsureDirOnlyOnSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(m.localDir, "不该出现的")); !os.IsNotExist(err) {
 		t.Fatal("add 失败不该在网盘里留下空文件夹")
-	}
-}
-
-func TestAddRollsBackAria2WhenDBWriteFails(t *testing.T) {
-	m, mock := newTestManager(t)
-	sqlDB, err := m.db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := m.Add("https://example.com/orphan.bin", ""); err == nil {
-		t.Fatal("数据库写入失败时 Add 应返回错误")
-	}
-	if len(mock.removed) != 1 || mock.removed[0] != "gid1" {
-		t.Fatalf("数据库写入失败后应撤销 aria2 任务,removed=%v", mock.removed)
 	}
 }
 
@@ -702,18 +537,13 @@ func TestMagnetHash(t *testing.T) {
 	if h, err := magnetHash("magnet:?xt=urn:btih:" + strings.Repeat("AB", 20)); err != nil || h != strings.Repeat("ab", 20) {
 		t.Fatalf("大写 btih 应当转小写,得到 %q, %v", h, err)
 	}
-	// 32 位 Base32 是 BEP 9 允许的常见写法,统一转成 40 位 hex。
-	base32Magnet := "magnet:?xt=urn:btih:" + strings.Repeat("A", 32)
-	if h, err := magnetHash(base32Magnet); err != nil || h != strings.Repeat("00", 20) {
-		t.Fatalf("Base32 btih 转换 = %q, %v; want 40 个 0", h, err)
-	}
 	// 后面还跟别的参数
 	if h, err := magnetHash(good + "&dn=foo&tr=http://x/y"); err != nil || h != strings.Repeat("ab", 20) {
 		t.Fatalf("带后续参数应只抠出 btih,得到 %q, %v", h, err)
 	}
 	for _, bad := range []string{
-		"magnet:?dn=foo",                                 // 没有 btih
-		"magnet:?xt=urn:btih:abcdef",                     // 不是 40 位
+		"magnet:?dn=foo",                       // 没有 btih
+		"magnet:?xt=urn:btih:abcdef",           // 不是 40 位
 		"magnet:?xt=urn:btih:" + strings.Repeat("z", 40), // 不是 hex
 	} {
 		if _, err := magnetHash(bad); err == nil {
@@ -722,9 +552,73 @@ func TestMagnetHash(t *testing.T) {
 	}
 }
 
-// 磁力元数据任务必须运行，但 aria2 根据元数据生成的真实下载必须暂停。
-// pause=true 会把元数据任务本身也停掉；pause-metadata=true 才是这里需要的语义。
-func TestAddMagnetUsesPauseMetadata(t *testing.T) {
+func TestWithTrackers(t *testing.T) {
+	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20)
+	out := withTrackers(magnet, "http://a.com/announce, udp://b.com/announce")
+	if !strings.Contains(out, "&tr=http%3A%2F%2Fa.com%2Fannounce") ||
+		!strings.Contains(out, "&tr=udp%3A%2F%2Fb.com%2Fannounce") {
+		t.Fatalf("tracker 没有追加进磁力: %q", out)
+	}
+	if got := withTrackers(magnet, " , ,"); got != magnet {
+		t.Fatalf("空白 tracker 应当跳过: %q", got)
+	}
+}
+
+// 磁力转种子:finishMagnet 把 aria2 里的磁力元数据任务换成 .torrent 任务,
+// 库记录迁到新 gid(follows=旧 gid),旧 gid 仍能解析,删除也照常工作。
+func TestFinishMagnetMigrates(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	old := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20)
+	task, err := m.Add(old, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+	if len(mock.added) != 1 || mock.added[0] != old {
+		t.Fatalf("磁力应先照旧交给 aria2,得到 %v", mock.added)
+	}
+
+	m.finishMagnet(metaGID, old, "bt", "ZmFrZXRvcnJlbnQ=", "some-movie")
+
+	_, tasks := m.List()
+	if len(tasks) != 1 {
+		t.Fatalf("want 1 task, got %d", len(tasks))
+	}
+	nt := tasks[0]
+	if nt.GID == metaGID {
+		t.Fatalf("gid 应换成种子任务,还是旧 %q", metaGID)
+	}
+	if nt.Follows != metaGID {
+		t.Fatalf("新记录应记 follows=%q,得到 %q", metaGID, nt.Follows)
+	}
+	if nt.Status != "paused" {
+		t.Fatalf("转出的种子任务应为 paused,得到 %q", nt.Status)
+	}
+	if nt.URL != old {
+		t.Fatalf("URL 应保留磁力,得到 %q", nt.URL)
+	}
+	if len(mock.torrentPaused) != 1 || mock.torrentPaused[0] != "true" {
+		t.Fatalf("转出的种子任务要挂起等勾选: %v", mock.torrentPaused)
+	}
+
+	// 前端拿旧 gid 轮询/勾选/暂停/删除都要落到新任务上
+	if cur := m.resolveGID(metaGID); cur != nt.GID {
+		t.Fatalf("resolveGID(%q) = %q, want %q", metaGID, cur, nt.GID)
+	}
+	mock.statuses[nt.GID] = &Status{GID: nt.GID, Status: "paused"}
+	if _, err := m.RemoveTask(metaGID, false); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks = m.List()
+	if len(tasks) != 0 {
+		t.Fatalf("按旧 gid 删除后应无任务,got %d", len(tasks))
+	}
+}
+
+// 磁力任务必须从一开始就挂起:元数据由 PocketDrive 自己取,不让 aria2
+// 拉到后立刻 follow 成真实下载偷写入网盘。
+func TestAddMagnetPaused(t *testing.T) {
 	m, mock := newTestManager(t)
 
 	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("12", 20)
@@ -732,42 +626,137 @@ func TestAddMagnetUsesPauseMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mock.addPauseMeta) != 1 || mock.addPauseMeta[0] != "true" {
-		t.Fatalf("磁力任务应带 pause-metadata=true 提交,得到 %v", mock.addPauseMeta)
+	if len(mock.addPaused) != 1 || mock.addPaused[0] != "true" {
+		t.Fatalf("磁力任务应带 pause=true 提交,得到 %v", mock.addPaused)
 	}
-	if mock.addPaused[0] != "" {
-		t.Fatalf("磁力元数据任务不能带 pause=true,得到 %q", mock.addPaused[0])
+	if task.Status != "paused" {
+		t.Fatalf("磁力任务落库应为 paused,得到 %q", task.Status)
 	}
-	if task.Status != "active" {
-		t.Fatalf("磁力元数据任务落库应为 active,得到 %q", task.Status)
-	}
-
-	// Base32 磁力同样走 aria2 原生元数据流程。
-	base32Magnet := "magnet:?xt=urn:btih:" + strings.Repeat("A", 32)
-	base32Task, err := m.Add(base32Magnet, "bt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mock.addPauseMeta[1] != "true" || mock.addPaused[1] != "" || base32Task.Status != "active" {
-		t.Fatalf("Base32 磁力选项不正确: pause-metadata=%q pause=%q status=%q",
-			mock.addPauseMeta[1], mock.addPaused[1], base32Task.Status)
-	}
-
-	// 明显无效的 btih 直接拒绝，不进入 aria2 队列。
-	before := len(mock.added)
-	if _, err := m.Add("magnet:?xt=urn:btih:abcdef", "bt"); err == nil {
-		t.Fatal("非法 btih 磁力应当被拒绝")
-	}
-	if len(mock.added) != before {
-		t.Fatal("非法磁力不应提交给 aria2")
+	_, tasks := m.List()
+	if tasks[0].Status != "paused" {
+		t.Fatalf("列表里的磁力任务应为 paused,得到 %q", tasks[0].Status)
 	}
 
 	// 普通直链不受影响
 	if _, err := m.Add("https://a.com/f.iso", ""); err != nil {
 		t.Fatal(err)
 	}
-	if mock.addPaused[2] != "" || mock.addPauseMeta[2] != "" {
-		t.Fatalf("直链不该带 BT 暂停选项,pause=%q pause-metadata=%q",
-			mock.addPaused[2], mock.addPauseMeta[2])
+	if mock.addPaused[1] != "" {
+		t.Fatalf("直链不该带 pause,得到 %q", mock.addPaused[1])
+	}
+}
+
+// 同一磁力只允许一个转换在跑;失败后由 ensureMagnetConvert(前端重试触发)
+// 重新拉起,但要在退避窗口之后。
+func TestMagnetConvertDedupeAndRetry(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	magnet := "magnet:?xt=urn:btih:" + strings.Repeat("34", 20)
+	task, err := m.Add(magnet, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Add 拉起一次
+	m.magnetMu.Lock()
+	_, exists := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if !exists {
+		t.Fatal("Add 后应已登记磁力转换 job")
+	}
+
+	// 重复拉起被去重(不叠加 goroutine 计数,只验证不 panic 且还是同一个 job)
+	m.startMagnetConvert(task.GID, magnet, "bt", strings.Repeat("34", 20))
+	m.magnetMu.Lock()
+	j := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if j == nil || !j.running {
+		t.Fatalf("job 应在跑: %+v", j)
+	}
+
+	// 模拟转换失败:job 摘掉 running,记下失败时间
+	m.magnetMu.Lock()
+	j.running = false
+	j.lastErrAt = time.Now()
+	m.magnetMu.Unlock()
+
+	// 退避期内 ensure 不重启
+	m.ensureMagnetConvert(task.GID)
+	m.magnetMu.Lock()
+	still := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if still == nil || still.running {
+		t.Fatal("退避期内不该重启转换")
+	}
+
+	// 退避期过后(把时间拨回去)重新拉起
+	m.magnetMu.Lock()
+	still.lastErrAt = time.Now().Add(-10 * time.Second)
+	m.magnetMu.Unlock()
+	m.ensureMagnetConvert(task.GID)
+	m.magnetMu.Lock()
+	again := m.magnetJobs[task.GID]
+	m.magnetMu.Unlock()
+	if again == nil || !again.running {
+		t.Fatal("退避期过后应重新拉起转换")
+	}
+}
+
+// 磁力转种子迁移旧记录删掉后,syncOne 再看到「gid 不存在」时不该把旧
+// 记录复活成一条错误任务(GORM Save 按主键 upsert 会插回来)。
+func TestSyncOneDoesNotResurrectMigratedMagnet(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	old := "magnet:?xt=urn:btih:" + strings.Repeat("ef", 20)
+	task, err := m.Add(old, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+	// aria2 视角:旧 gid 已经被删(比如 finishMagnet 里 Remove 掉)
+	delete(mock.statuses, metaGID)
+
+	// finishMagnet 迁移完成:旧记录没了,新记录 follows=旧 gid
+	m.finishMagnet(metaGID, old, "bt", "ZmFrZXRvcnJlbnQ=", "m")
+	if _, tasks := m.List(); len(tasks) != 1 {
+		t.Fatalf("迁移后应有 1 条任务,got %d", len(tasks))
+	}
+
+	m.sync()
+	_, tasks := m.List()
+	if len(tasks) != 1 || tasks[0].GID == metaGID {
+		t.Fatalf("旧磁力记录不应被复活,got %+v", tasks)
+	}
+	if tasks[0].Status != "paused" {
+		t.Fatalf("新任务状态 = %q, want paused", tasks[0].Status)
+	}
+}
+
+// 磁力已被 aria2 自己 follow(或用户已删除)时,finishMagnet 不该再迁移
+// 出第二条任务。
+func TestFinishMagnetNoOpWhenMigrated(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	old := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20)
+	task, err := m.Add(old, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaGID := task.GID
+
+	// 先手动把旧记录迁走,模拟 aria2 followedBy 抢先
+	m.db.Delete(&db.DownloadTask{}, "gid = ?", metaGID)
+	nt := db.DownloadTask{
+		GID: "realgid", URL: old, Dir: "bt", Status: "active", Follows: metaGID,
+	}
+	m.db.Create(&nt)
+
+	m.finishMagnet(metaGID, old, "bt", "ZmFrZXRvcnJlbnQ=", "x")
+
+	_, tasks := m.List()
+	if len(tasks) != 1 || tasks[0].GID != "realgid" {
+		t.Fatalf("已迁移的任务不应被再次替换,got %+v", tasks)
+	}
+	if len(mock.torrentPaused) != 0 {
+		t.Fatalf("不该再往 aria2 里塞种子任务: %v", mock.torrentPaused)
 	}
 }

@@ -6,7 +6,6 @@ set -euo pipefail
 
 DIR=/opt/pocketdrive
 IMAGE=ghcr.io/lqlcj/pocketdrive:latest
-ARIA2_IMAGE=ghcr.io/lqlcj/pocketdrive:aria2-latest
 
 say()  { echo -e "\033[1;32m[PocketDrive]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[PocketDrive]\033[0m $*"; }
@@ -67,26 +66,22 @@ services:
             - ./data:/data
             - ./config:/config
         depends_on:
-            aria2:
-                condition: service_healthy
+            - aria2
     aria2:
-        # 项目自维护镜像:aria2 二进制来自 Alpine 官方仓库,每周重建并冒烟测试
-        image: $ARIA2_IMAGE
+        image: p3terx/aria2-pro
         container_name: pocketdrive-aria2
         restart: unless-stopped
-        stop_grace_period: 30s
         environment:
             - RPC_SECRET=\${ARIA2_SECRET}
             - LISTEN_PORT=6888
             - MAX_CONCURRENT_DOWNLOADS=3
-            - BT_MAX_PEERS=\${ARIA2_BT_MAX_PEERS:-55}
-            - DISK_CACHE=\${ARIA2_DISK_CACHE:-64M}
-            - ENABLE_DHT6=\${ARIA2_ENABLE_DHT6:-false}
+            # 镜像默认让 aria2c 以 nobody(65534)运行,写不进 PocketDrive
+            # 以 root 建的目录;统一成 root 才能共享 /data
+            - PUID=0
+            - PGID=0
             - UMASK_SET=022
-            - TZ=\${TZ:-Asia/Shanghai}
         volumes:
             - ./data:/data
-            # 继续使用旧版的 session/DHT 目录,升级不会丢未完成任务
             - ./config/aria2:/config
         ports:
             - '6888:6888'
@@ -97,23 +92,6 @@ EOF
 say "拉取镜像并启动…"
 docker compose pull
 docker compose up -d
-
-say "等待原版 aria2 通过健康检查…"
-ARIA2_HEALTH=starting
-i=0
-while [ "$i" -lt 45 ]; do
-    ARIA2_HEALTH=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' pocketdrive-aria2 2>/dev/null || true)
-    [ "$ARIA2_HEALTH" = healthy ] && break
-    [ "$ARIA2_HEALTH" = unhealthy ] && break
-    i=$((i + 1))
-    sleep 2
-done
-if [ "$ARIA2_HEALTH" != healthy ]; then
-    docker compose logs --tail=100 aria2 >&2 || true
-    die "aria2 启动检查失败(status=$ARIA2_HEALTH),请把以上日志发给维护者"
-fi
-ARIA2_VERSION=$(docker compose exec -T aria2 aria2c --version 2>/dev/null | sed -n '1p' || true)
-[ -n "$ARIA2_VERSION" ] && say "aria2 已就绪:$ARIA2_VERSION"
 
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -n "$IP" ] || IP="服务器IP"

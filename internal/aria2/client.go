@@ -68,7 +68,7 @@ type Status struct {
 	ErrorMessage    string   `json:"errorMessage"`
 	FollowedBy      []string `json:"followedBy"`
 	Files           []File   `json:"files"`
-	Bittorrent      *struct {
+	Bittorrent *struct {
 		Info *struct {
 			Name string `json:"name"`
 		} `json:"info"`
@@ -78,9 +78,8 @@ type Status struct {
 // File 是 aria2 报回来的任务文件;Length 是字符串(BT 文件可能超大,64 位
 // 整型经 JSON-RPC 也只会序列化成十进制字符串),用到的地方再转 int64。
 type File struct {
-	Path     string `json:"path"`
-	Length   string `json:"length"`
-	Selected string `json:"selected"`
+	Path   string `json:"path"`
+	Length string `json:"length"`
 }
 
 func (c *Client) AddURI(uri string, opts map[string]string) (string, error) {
@@ -114,7 +113,7 @@ func (c *Client) Unpause(gid string) error { return c.call("aria2.unpause", []an
 func (c *Client) ChangeOption(gid string, opts map[string]string) error {
 	return c.call("aria2.changeOption", []any{gid, opts}, nil)
 }
-func (c *Client) Remove(gid string) error { return c.call("aria2.remove", []any{gid}, nil) }
+func (c *Client) Remove(gid string) error  { return c.call("aria2.remove", []any{gid}, nil) }
 
 func (c *Client) RemoveDownloadResult(gid string) error {
 	return c.call("aria2.removeDownloadResult", []any{gid}, nil)

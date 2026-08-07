@@ -1,9 +1,8 @@
-# PocketDrive 部署：PocketDrive + 项目自维护的原版 aria2 两个容器，
-# 共享同一个 /data（整个网盘目录）。
+# PocketDrive 部署:pocketdrive + aria2 两个容器,共享同一个 /data(整个网盘目录)
 #
 # 两种用法:
-#   A. 直接用 GHCR 镜像（推荐，VPS 无需编译）：保持 image 行不动
-#   B. 本地开发：可把对应服务的 build 注释取消
+#   A. 直接用官方镜像(推荐,VPS 上无需编译):保持 image 行不动
+#   B. 自己改了代码想本地构建:注释掉 image 行,取消 build 三行的注释
 #
 # 使用前:在同目录 .env 中设置 ARIA2_SECRET、POCKETDRIVE_ADMIN_PASSWORD
 #
@@ -38,33 +37,30 @@ services:
             - ./data:/data
             - ./config:/config
         depends_on:
-            aria2:
-                condition: service_healthy
+            - aria2
     aria2:
-        # 原版 aria2 来自 Alpine 官方 community 包。这个镜像由本项目每周
-        # 自动重建并跑 RPC + HTTPS 实际下载测试，不依赖第三方魔改镜像。
-        image: ${POCKETDRIVE_ARIA2_IMAGE:-ghcr.io/lqlcj/pocketdrive:aria2-latest}
-        # build:
-        #     context: ..
-        #     dockerfile: docker/Dockerfile.aria2
+        image: p3terx/aria2-pro
         container_name: pocketdrive-aria2
         restart: unless-stopped
-        stop_grace_period: 30s
         environment:
             - RPC_SECRET=${ARIA2_SECRET:?请设置随机的 ARIA2_SECRET}
-            # BT 监听端口（需要在防火墙放行 TCP+UDP，不开也能下载但冷门资源更慢）
+            # BT 监听端口(需要在防火墙放行 TCP+UDP,不开也能下载只是慢)
             - LISTEN_PORT=6888
-            # 启动默认值；PocketDrive 启动后会把网页中的设置通过 RPC 覆盖上去。
+            # 2G VPS 资源限制
             - MAX_CONCURRENT_DOWNLOADS=3
-            - BT_MAX_PEERS=${ARIA2_BT_MAX_PEERS:-55}
-            - DISK_CACHE=${ARIA2_DISK_CACHE:-64M}
-            - ENABLE_DHT6=${ARIA2_ENABLE_DHT6:-false}
+            # 这两行不能删。镜像里 aria2c 固定以 p3terx 用户跑,PUID/PGID
+            # 不设时是 65534(nobody);而 PocketDrive 以 root 建目录
+            # (root:root 0755),nobody 写不进去 —— 表现为 BT 报
+            # "Failed to make the directory ..., cause: Permission denied",
+            # 普通直链报 "Download aborted."(aria2 建文件失败时的外层文案)。
+            # 两个容器统一用 root,共享 /data 才不会打架。
+            - PUID=0
+            - PGID=0
             - UMASK_SET=022
-            - TZ=${TZ:-Asia/Shanghai}
         volumes:
             - ./data:/data
-            # 沿用旧版的目录和标准文件名 aria2.session / dht.dat / dht6.dat，
-            # 从 p3terx 镜像升级时未完成任务和 DHT 路由表可以继续使用。
+            # aria2 自己的配置与会话。挂出来,容器重启/升级后未完成的任务
+            # 还能接着下,DHT 路由表也不用重新热身
             - ./config/aria2:/config
         ports:
             - '6888:6888'

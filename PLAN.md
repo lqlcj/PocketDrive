@@ -25,18 +25,18 @@
 | 后端 | Go 1.25+,标准库 net/http | 单二进制、常驻内存 ~40-80MB,交叉编译 amd64/arm64 |
 | 数据库 | SQLite(glebarez/sqlite 纯 Go 驱动)+ GORM | CGO_ENABLED=0 可静态编译;WAL + `SetMaxOpenConns(1)` |
 | WebDAV | golang.org/x/net/webdav | 标准库级实现,直接挂数据目录 |
-| 离线下载 | 项目自维护的原版 aria2 sidecar(JSON-RPC) | Alpine 官方包,直链和 BT 一个进程全包,~30-100MB |
+| 离线下载 | aria2 sidecar(JSON-RPC) | 直链和 BT 一个进程全包,~30-100MB |
 | 前端 | React 18 + TypeScript + Vite | — |
 | UI 库 | animal-island-ui v1.4+ | 31 组件,活跃维护;**CC-BY-NC-4.0 禁商用,私用 OK** |
 | Markdown | react-markdown + remark-gfm | — |
-| 部署 | docker-compose(PocketDrive + aria2 两个容器) | 两个 GHCR 镜像均由同一工作流构建和测试 |
+| 部署 | docker-compose(lpanel + aria2 两个容器) | 前端 go:embed 进单二进制 |
 
 ## 三、内存预算(2G VPS)
 
 | 组件 | 常驻内存 | 说明 |
 |---|---|---|
 | lpanel(Go) | 40-80MB | 上传/下载全部流式 io.Copy,不整文件进内存 |
-| aria2 | 30-100MB | 限制 `bt-max-peers=55`、`max-concurrent-downloads=3`,会话/DHT 持久化 |
+| aria2 | 30-100MB | 限制 `bt-max-peers=55`、`max-concurrent-downloads=3` |
 | SQLite | 内嵌 | 无独立进程 |
 
 合计 <200MB,余量充足。视频/音频播放走 `http.ServeContent`(Range 请求),内存开销近零。

@@ -31,18 +31,19 @@ type Manager struct {
 	degraded atomic.Bool
 	// 全局设置是否已成功推给 aria2(重连后需要重推)
 	globalsApplied atomic.Bool
-	// Tracker 自动更新使用多个固定可信源，测试时可替换成本地 HTTP 服务。
-	trackerSources []string
-	// 自动更新、手动更新和保存设置后的补更新可能同时触发；串行化后
-	// 再检查缓存时间，避免重复请求公网源和交错写入缓存。
-	trackerUpdateMu sync.Mutex
 
 	mu     sync.Mutex
 	speeds map[string]int64
 
-	// migMu 串行化「磁力元数据 gid → 真实下载 gid」的 followedBy 迁移，
-	// 并避免迁移与同步错误处理并发时把旧记录重新写回来。
+	// migMu 串行化「磁力元数据 gid → 真实下载 gid」的迁移:aria2 自己的
+	// followedBy 迁移(syncOne)和「磁力转种子」的替换(finishMagnet)
+	// 可能并发,不加锁会迁出重复任务。
 	migMu sync.Mutex
+
+	// magnetMu / magnetJobs:正在进行的「磁力转种子」任务。按 gid 记,
+	// 负责去重(同一磁力只转一次)、失败后由前端「重试」再拉起。
+	magnetMu   sync.Mutex
+	magnetJobs map[string]*magnetJob
 
 	verMu   sync.Mutex
 	version string
@@ -74,13 +75,13 @@ func (m *Manager) Degraded() bool { return m.degraded.Load() }
 // 目录在本进程眼里的路径(单容器/本机开发时两者相同)。
 func NewManager(gdb *gorm.DB, c *Client, dataRoot, localDir string) *Manager {
 	return &Manager{
-		db:             gdb,
-		c:              c,
-		dataRoot:       dataRoot,
-		localDir:       localDir,
-		speeds:         make(map[string]int64),
-		trackerSources: append([]string(nil), defaultTrackerSources...),
-		stop:           make(chan struct{}),
+		db:         gdb,
+		c:          c,
+		dataRoot:   dataRoot,
+		localDir:   localDir,
+		speeds:     make(map[string]int64),
+		magnetJobs: make(map[string]*magnetJob),
+		stop:       make(chan struct{}),
 	}
 }
 
@@ -139,8 +140,9 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	if err != nil {
 		if strings.Contains(err.Error(), "is not found") {
 			// aria2 重启丢了任务(未到终态):标记错误,历史保留。
-			// 和 followedBy 迁移串行化：迁移可能已经把旧磁力记录换成
-			// 真实任务，别用 Save(按主键 upsert)把旧记录又复活出来。
+			// 和 finishMagnet 串行化:它可能在两秒的同步间隔里把旧磁力
+			// 记录删掉换成了种子任务,别用 Save(按主键 upsert)把
+			// 旧记录又复活出来。
 			m.migMu.Lock()
 			var still db.DownloadTask
 			if m.db.First(&still, "gid = ?", t.GID).Error == nil {
@@ -156,26 +158,23 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	}
 	m.degraded.Store(false)
 
-	// 磁力：aria2 取到元数据后会生成 paused 的真实下载，gid 在
-	// followedBy 里；把数据库记录迁过去。
+	// 磁力:元数据下载完成后真正的下载在 followedBy gid 里,迁移记录
 	if st.Status == "complete" && len(st.FollowedBy) > 0 {
 		m.migMu.Lock()
-		// 拿到锁后任务可能已被另一轮同步或用户操作迁移/删除。
+		// 拿到锁后任务可能已被 finishMagnet(磁力转种子)迁移/删除
 		var still db.DownloadTask
 		if err := m.db.First(&still, "gid = ?", t.GID).Error; err != nil {
 			m.migMu.Unlock()
 			return
 		}
 		newGID := st.FollowedBy[0]
+		m.db.Delete(&db.DownloadTask{}, "gid = ?", t.GID)
 		nt := db.DownloadTask{
 			GID: newGID, URL: t.URL, Dir: t.Dir,
-			Status: "paused", CreatedAt: t.CreatedAt,
+			Status: "active", CreatedAt: t.CreatedAt,
 			Follows: t.GID,
 		}
-		if err := m.replaceTaskRecord(t.GID, &nt); err != nil {
-			m.migMu.Unlock()
-			return
-		}
+		m.db.Save(&nt)
 		m.migMu.Unlock()
 		m.syncOne(&nt)
 		return
@@ -184,7 +183,11 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	t.Status = st.Status
 	t.TotalLength = parseI64(st.TotalLength)
 	t.CompletedLength = parseI64(st.CompletedLength)
+	prevErr := t.ErrorMsg
 	t.ErrorMsg = friendlyErr(st.ErrorMessage)
+	// 同一个任务每 2 秒同步一次,只在报错第一次出现时记,别刷屏
+	if t.ErrorMsg != "" && t.ErrorMsg != prevErr {
+	}
 	if name := statusName(st); name != "" {
 		t.Name = name
 	}
@@ -197,17 +200,6 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 		m.speeds[t.GID] = parseI64(st.DownloadSpeed)
 	}
 	m.mu.Unlock()
-}
-
-// replaceTaskRecord 原子地把旧 gid 迁到新 gid。先保存新记录再删旧记录,
-// 既保证 resolveGID 在迁移窗口中可用,也避免写库失败时把任务历史弄丢。
-func (m *Manager) replaceTaskRecord(oldGID string, next *db.DownloadTask) error {
-	return m.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(next).Error; err != nil {
-			return err
-		}
-		return tx.Delete(&db.DownloadTask{}, "gid = ?", oldGID).Error
-	})
 }
 
 func statusName(st *Status) string {
@@ -255,8 +247,8 @@ func (m *Manager) taskOpts(relDir string, bt bool) map[string]string {
 		"dir":       dir,
 		"seed-time": strconv.Itoa(s.SeedTimeMin),
 	}
-	if bt {
-		if t := m.effectiveTrackers(s); t != "" {
+	if bt && s.TrackerAuto {
+		if t := m.trackers(); t != "" {
 			opts["bt-tracker"] = t
 		}
 	}
@@ -288,12 +280,15 @@ func (m *Manager) ensureDir(relDir string) {
 
 // friendlyErr 把 aria2 的原始报错翻成能照着做的中文。
 //
-// "Download aborted." 是 aria2 初始化文件失败时的外层文案，真正原因
-// 往往只在 aria2 容器日志里。项目维护的 compose 已让两个容器共享同一个
-// /data；如果用户自行修改了挂载路径或运行用户，这里给出可执行的排查提示。
+// "Download aborted." 是 aria2 在 RequestGroup::initPieceStorage 里
+// initAndOpenFile() 抛异常时的**外层**文案,真正的原因(多半是
+// Permission denied)只留在 aria2 自己的日志里、不会经 RPC 传出来。
+// 加上 BT 那条明说 Permission denied 的,两者根因是同一个:
+// p3terx/aria2-pro 默认让 aria2c 以 nobody(65534)运行,写不进
+// PocketDrive 以 root 建的目录。
 func friendlyErr(msg string) string {
-	const fix = "(请确认 PocketDrive 与 aria2 都挂载同一个 ./data:/data，" +
-		"然后重建官方 compose；详细原因可看 docker compose logs aria2)"
+	const fix = "(aria2 容器写不进网盘目录:给 aria2 服务加上 PUID=0 / PGID=0 " +
+		"后 docker compose up -d,或直接重跑一次安装脚本)"
 	switch {
 	case strings.Contains(msg, "Permission denied"):
 		return msg + " " + fix
@@ -311,15 +306,15 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 		return nil, err
 	}
 	isMagnet := strings.HasPrefix(rawURL, "magnet:")
+	// 磁力元数据由 PocketDrive 自己取(见 magnet.go);hash 解析不出来
+	// 的怪磁力保持原样丢给 aria2。
+	hash, _ := magnetHash(rawURL)
 	opts := m.taskOpts(relDir, isMagnet)
-	if isMagnet {
-		if _, err := magnetHash(rawURL); err != nil {
-			return nil, err
-		}
-		// 元数据任务本身必须运行；pause-metadata 只暂停 aria2 根据元数据
-		// 创建的真实下载。这样先拿到完整文件清单，再由用户勾选并恢复，
-		// 不会在弹框出现前偷跑数据。
-		opts["pause-metadata"] = "true"
+	if hash != "" {
+		// 关键:磁力任务从一开始就挂起。否则 aria2 自己拉到元数据后会
+		// 立刻 follow 成真实下载、未经勾选就把整个种子写进网盘(前端的
+		// 暂停是事后补救,兜不住);挂起后 aria2 永远不会碰这个磁力。
+		opts["pause"] = "true"
 	}
 	gid, err := m.c.AddURI(rawURL, opts)
 	if err != nil {
@@ -327,13 +322,17 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())
 	}
 	m.degraded.Store(false)
+	m.ensureDir(relDir)
 	t := db.DownloadTask{GID: gid, URL: rawURL, Dir: relDir, Status: "active"}
+	if hash != "" {
+		t.Status = "paused"
+	}
 	if err := m.db.Create(&t).Error; err != nil {
-		_ = m.c.Remove(gid)
-		_ = m.c.RemoveDownloadResult(gid)
 		return nil, err
 	}
-	m.ensureDir(relDir)
+	if hash != "" {
+		m.startMagnetConvert(gid, rawURL, relDir, hash)
+	}
 	return &t, nil
 }
 
@@ -362,6 +361,7 @@ func (m *Manager) AddTorrent(torrentB64, relDir, name string, paused bool) (*db.
 		return nil, errors.New("aria2 不可达或拒绝任务: " + err.Error())
 	}
 	m.degraded.Store(false)
+	m.ensureDir(relDir)
 	t := db.DownloadTask{
 		GID: gid, URL: name, Dir: relDir, Status: "active",
 		Name: strings.TrimSuffix(name, ".torrent"),
@@ -370,29 +370,25 @@ func (m *Manager) AddTorrent(torrentB64, relDir, name string, paused bool) (*db.
 		t.Status = "paused"
 	}
 	if err := m.db.Create(&t).Error; err != nil {
-		_ = m.c.Remove(gid)
-		_ = m.c.RemoveDownloadResult(gid)
 		return nil, err
 	}
-	m.ensureDir(relDir)
 	return &t, nil
 }
 
 // TorrentFile 是「选完再下」弹框里的一行:aria2 的 1-based 文件序号 +
 // 完整路径 + 大小。
 type TorrentFile struct {
-	Index    int    `json:"index"`
-	Path     string `json:"path"`
-	Length   int64  `json:"length"`
-	Selected bool   `json:"selected"`
+	Index  int    `json:"index"`
+	Path   string `json:"path"`
+	Length int64  `json:"length"`
 }
 
 // resolveGID 把前端传进来的 gid(磁力链拿到的通常是元数据 gid)解析成
 // aria2 当前真实下载的 gid。磁力元数据就绪后 aria2 会 follow 出新 gid,
 // 旧 gid 只留一条 [METADATA] 伪文件——拿旧 gid 永远等不出文件清单。
 // 顺序:①库里迁移记录(follows=旧gid)→新 gid;②aria2 的 followedBy。
-// 先查 follows 再查 gid：数据库迁移先建新记录后删旧记录，这个顺序
-// 保证中间窗口里旧 gid 仍能翻到新 gid。
+// 先查 follows 再查 gid:finishMagnet 先建新记录后删旧的,这个顺序保证
+// 中间窗口里旧 gid 永远能翻到新 gid。
 func (m *Manager) resolveGID(gid string) string {
 	var t db.DownloadTask
 	if err := m.db.Where("follows = ?", gid).First(&t).Error; err == nil {
@@ -409,6 +405,9 @@ func (m *Manager) resolveGID(gid string) string {
 // 之前只有一条 [METADATA] 伪文件(前端据此判断「还不能选」);.torrent
 // 添加后立刻就有完整清单。
 func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
+	// 磁力:确保有转换任务在跑(首次由 Add 拉起;失败后前端「重试」/
+	// 轮询到这里会重新拉起)。
+	m.ensureMagnetConvert(gid)
 	cur := m.resolveGID(gid)
 	st, err := m.c.TellStatus(cur)
 	if err != nil {
@@ -420,8 +419,6 @@ func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
 			Index:  i + 1,
 			Path:   f.Path,
 			Length: parseI64(f.Length),
-			// aria2 对旧版本或测试桩未返回 selected 时按默认选中处理。
-			Selected: f.Selected != "false",
 		})
 	}
 	return statusName(st), files, nil
@@ -429,7 +426,7 @@ func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
 
 // SelectFiles 应用用户勾选的文件序号后开始下载。files 是 aria2 的
 // 1-based 序号;不传则下载全部。调用时任务应在 paused 状态——种子添加
-// 时直接挂起，磁力生成的真实任务由 pause-metadata 自动挂起。
+// 时就挂起,磁力则由前端在元数据就绪后先暂停再让用户勾选。
 func (m *Manager) SelectFiles(gid string, files []int) error {
 	cur := m.resolveGID(gid)
 	if len(files) > 0 {
