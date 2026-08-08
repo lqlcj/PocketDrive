@@ -40,8 +40,8 @@ type Manager struct {
 	// 可能并发,不加锁会迁出重复任务。
 	migMu sync.Mutex
 
-	// magnetMu / magnetJobs:正在进行的「磁力转种子」任务。按 gid 记,
-	// 负责去重(同一磁力只转一次)、失败后由前端「重试」再拉起。
+	// magnetMu / magnetJobs:正在进行的「磁力/种子链接转 .torrent」任务。
+	// 按 gid 记,负责去重(同一任务只转一次)、失败后由前端「重试」再拉起。
 	magnetMu   sync.Mutex
 	magnetJobs map[string]*magnetJob
 
@@ -306,14 +306,18 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 		return nil, err
 	}
 	isMagnet := strings.HasPrefix(rawURL, "magnet:")
-	// 磁力元数据由 PocketDrive 自己取(见 magnet.go);hash 解析不出来
+	// 磁力元数据由 PocketDrive 自己取(见 magnet.go);.torrent 链接
+	// 先转成种子再走 AddTorrent(见 torrentlink.go);hash 解析不出来
 	// 的怪磁力保持原样丢给 aria2。
 	hash, _ := magnetHash(rawURL)
-	opts := m.taskOpts(relDir, isMagnet)
-	if hash != "" {
-		// 关键:磁力任务从一开始就挂起。否则 aria2 自己拉到元数据后会
-		// 立刻 follow 成真实下载、未经勾选就把整个种子写进网盘(前端的
-		// 暂停是事后补救,兜不住);挂起后 aria2 永远不会碰这个磁力。
+	isTorrentURL := !isMagnet && isTorrentLink(rawURL)
+	opts := m.taskOpts(relDir, isMagnet || isTorrentURL)
+	hold := hash != "" || isTorrentURL
+	if hold {
+		// 关键:磁力/种子链接任务从一开始就挂起。否则 aria2 自己拉到
+		// 元数据(或把 .torrent 链接当普通文件下载)后会未经勾选就把
+		// 数据写进网盘(前端的暂停是事后补救,兜不住);挂起后 aria2
+		// 永远不会碰它,直到 PocketDrive 转出/取到种子再接管。
 		opts["pause"] = "true"
 	}
 	gid, err := m.c.AddURI(rawURL, opts)
@@ -324,14 +328,16 @@ func (m *Manager) Add(rawURL, relDir string) (*db.DownloadTask, error) {
 	m.degraded.Store(false)
 	m.ensureDir(relDir)
 	t := db.DownloadTask{GID: gid, URL: rawURL, Dir: relDir, Status: "active"}
-	if hash != "" {
+	if hold {
 		t.Status = "paused"
 	}
 	if err := m.db.Create(&t).Error; err != nil {
 		return nil, err
 	}
 	if hash != "" {
-		m.startMagnetConvert(gid, rawURL, relDir, hash)
+		m.startMagnetConvert(gid, rawURL, relDir)
+	} else if isTorrentURL {
+		m.startTorrentLinkConvert(gid, rawURL, relDir)
 	}
 	return &t, nil
 }
@@ -403,18 +409,32 @@ func (m *Manager) resolveGID(gid string) string {
 
 // TorrentFiles 返回 BT 任务的种子名与文件清单。磁力链在元数据下载完成
 // 之前只有一条 [METADATA] 伪文件(前端据此判断「还不能选」);.torrent
-// 添加后立刻就有完整清单。
+// 链接在转成种子之前,挂起的 addUri 任务也只报一条 0 字节占位文件。
+// 这两种占位都不进清单,清单里只留元数据/种子里真实解析出的文件。
+// .torrent 上传后立刻就有完整清单。
 func (m *Manager) TorrentFiles(gid string) (string, []TorrentFile, error) {
-	// 磁力:确保有转换任务在跑(首次由 Add 拉起;失败后前端「重试」/
-	// 轮询到这里会重新拉起)。
-	m.ensureMagnetConvert(gid)
+	// 磁力/种子链接:确保有转换任务在跑(首次由 Add 拉起;失败后前端
+	// 「重试」/轮询到这里会重新拉起)。
+	var t db.DownloadTask
+	if err := m.db.First(&t, "gid = ?", gid).Error; err == nil {
+		if t.Follows == "" && (strings.HasPrefix(t.URL, "magnet:") || isTorrentLink(t.URL)) {
+			m.ensureConvert(gid)
+		}
+	}
 	cur := m.resolveGID(gid)
 	st, err := m.c.TellStatus(cur)
 	if err != nil {
 		return "", nil, err
 	}
+	// 转换未完成(库里还是旧 gid、follows 为空)时放出来的任务只有占位
+	// 文件;哪怕 resolveGID 经 aria2 的 followedBy 翻到了真实任务,也不
+	// 该把 0 字节占位当清单给前端勾选。
+	pending := t.Follows == "" && (strings.HasPrefix(t.URL, "magnet:") || isTorrentLink(t.URL))
 	files := make([]TorrentFile, 0, len(st.Files))
 	for i, f := range st.Files {
+		if pending && parseI64(f.Length) == 0 {
+			continue
+		}
 		files = append(files, TorrentFile{
 			Index:  i + 1,
 			Path:   f.Path,

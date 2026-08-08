@@ -616,6 +616,138 @@ func TestFinishMagnetMigrates(t *testing.T) {
 	}
 }
 
+// 粘贴的 .torrent 链接:原样交给 aria2 只会被当成普通文件下载、永远
+// 解析不出元数据。这里要挂起并在后台把链接转成种子,再走 AddTorrent
+// (follows=旧 gid,旧 gid 仍能解析)。
+func TestTorrentLinkConvert(t *testing.T) {
+	m, mock := newTestManager(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 一个最小的 bencode 种子:info 里只有 name=movie
+		_, _ = w.Write([]byte("d4:infod4:name5:movieee"))
+	}))
+	defer ts.Close()
+	link := ts.URL + "/release.torrent?token=abc"
+
+	task, err := m.Add(link, "bt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.addPaused) != 1 || mock.addPaused[0] != "true" {
+		t.Fatalf("种子链接任务应带 pause=true 提交,得到 %v", mock.addPaused)
+	}
+	if task.Status != "paused" {
+		t.Fatalf("种子链接任务落库应为 paused,得到 %q", task.Status)
+	}
+
+	// 等后台转换完成(job 从 magnetJobs 摘掉、记录迁成种子任务)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.magnetMu.Lock()
+		_, running := m.magnetJobs[task.GID]
+		m.magnetMu.Unlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("链接转种子超时,job 还在跑")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	_, tasks := m.List()
+	if len(tasks) != 1 {
+		t.Fatalf("want 1 task after conversion, got %d", len(tasks))
+	}
+	nt := tasks[0]
+	if nt.GID == task.GID || nt.Follows != task.GID {
+		t.Fatalf("应迁成新 gid(follows=旧 gid),得到 gid=%q follows=%q", nt.GID, nt.Follows)
+	}
+	if nt.Status != "paused" {
+		t.Fatalf("转换后的任务应为 paused,得到 %q", nt.Status)
+	}
+	if nt.Name != "movie" {
+		t.Fatalf("name = %q, want movie(来自 .torrent 内容)", nt.Name)
+	}
+	if len(mock.torrentPaused) != 1 || mock.torrentPaused[0] != "true" {
+		t.Fatalf("转换生成的种子任务要挂起等勾选: %v", mock.torrentPaused)
+	}
+	if cur := m.resolveGID(task.GID); cur != nt.GID {
+		t.Fatalf("resolveGID(旧 gid) = %q, want %q", cur, nt.GID)
+	}
+}
+
+// 种子链接还没转完时,挂起的 addUri 任务只报一条 0 字节占位文件,
+// 不能当文件清单;转换完成后(follows 已迁好)才有真实文件。
+func TestTorrentLinkFilesPendingFiltered(t *testing.T) {
+	m, mock := newTestManager(t)
+
+	oldGID := "9gid"
+	link := "https://example.com/x.torrent"
+	m.db.Create(&db.DownloadTask{GID: oldGID, URL: link, Dir: "bt", Status: "paused"})
+	mock.statuses[oldGID] = &Status{
+		GID: oldGID, Status: "paused",
+		Files: []File{{Path: "/data/bt/x.torrent", Length: "0"}},
+	}
+	mock.statuses["realgid"] = &Status{
+		GID: "realgid", Status: "paused",
+		Bittorrent: &struct {
+			Info *struct {
+				Name string `json:"name"`
+			} `json:"info"`
+		}{Info: &struct {
+			Name string `json:"name"`
+		}{Name: "movie"}},
+		Files: []File{{Path: "/data/bt/movie/a.mkv", Length: "100"}},
+	}
+
+	_, files, err := m.TorrentFiles(oldGID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("转换未完成时不该把 0 字节占位当清单,得到 %+v", files)
+	}
+
+	// 转换完成:旧记录删掉,新记录 follows=旧 gid
+	m.db.Create(&db.DownloadTask{
+		GID: "realgid", URL: link, Dir: "bt", Status: "paused",
+		Name: "movie", Follows: oldGID,
+	})
+	m.db.Delete(&db.DownloadTask{}, "gid = ?", oldGID)
+
+	name, files, err := m.TorrentFiles(oldGID) // 前端仍拿旧 gid 轮询
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "movie" || len(files) != 1 || files[0].Length != 100 {
+		t.Fatalf("转换完成后应拿到真实清单,name=%q files=%+v", name, files)
+	}
+}
+
+func TestIsTorrentLink(t *testing.T) {
+	for _, ok := range []string{
+		"https://a.com/x.torrent",
+		"http://a.com/x.torrent?token=abc",
+		"https://a.com/dir/x.TORRENT",
+		"https://a.com/x.torrent#frag",
+	} {
+		if !isTorrentLink(ok) {
+			t.Errorf("isTorrentLink(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{
+		"https://a.com/x.iso",
+		"https://a.com/x.torrents",
+		"magnet:?xt=urn:btih:abcd",
+		"ftp://a.com/x.torrent",
+		"notaurl",
+	} {
+		if isTorrentLink(bad) {
+			t.Errorf("isTorrentLink(%q) = true, want false", bad)
+		}
+	}
+}
+
 // 磁力任务必须从一开始就挂起:元数据由 PocketDrive 自己取,不让 aria2
 // 拉到后立刻 follow 成真实下载偷写入网盘。
 func TestAddMagnetPaused(t *testing.T) {
@@ -646,7 +778,7 @@ func TestAddMagnetPaused(t *testing.T) {
 	}
 }
 
-// 同一磁力只允许一个转换在跑;失败后由 ensureMagnetConvert(前端重试触发)
+// 同一磁力只允许一个转换在跑;失败后由 ensureConvert(前端重试触发)
 // 重新拉起,但要在退避窗口之后。
 func TestMagnetConvertDedupeAndRetry(t *testing.T) {
 	m, _ := newTestManager(t)
@@ -665,7 +797,7 @@ func TestMagnetConvertDedupeAndRetry(t *testing.T) {
 	}
 
 	// 重复拉起被去重(不叠加 goroutine 计数,只验证不 panic 且还是同一个 job)
-	m.startMagnetConvert(task.GID, magnet, "bt", strings.Repeat("34", 20))
+	m.startMagnetConvert(task.GID, magnet, "bt")
 	m.magnetMu.Lock()
 	j := m.magnetJobs[task.GID]
 	m.magnetMu.Unlock()
@@ -680,7 +812,7 @@ func TestMagnetConvertDedupeAndRetry(t *testing.T) {
 	m.magnetMu.Unlock()
 
 	// 退避期内 ensure 不重启
-	m.ensureMagnetConvert(task.GID)
+	m.ensureConvert(task.GID)
 	m.magnetMu.Lock()
 	still := m.magnetJobs[task.GID]
 	m.magnetMu.Unlock()
@@ -692,7 +824,7 @@ func TestMagnetConvertDedupeAndRetry(t *testing.T) {
 	m.magnetMu.Lock()
 	still.lastErrAt = time.Now().Add(-10 * time.Second)
 	m.magnetMu.Unlock()
-	m.ensureMagnetConvert(task.GID)
+	m.ensureConvert(task.GID)
 	m.magnetMu.Lock()
 	again := m.magnetJobs[task.GID]
 	m.magnetMu.Unlock()

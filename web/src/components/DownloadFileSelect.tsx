@@ -9,6 +9,8 @@ export interface PendingSelect {
     gid: string;
     /** 磁力链:先加任务再等元数据,期间前端轮询文件清单并先暂停 */
     magnet: boolean;
+    /** 粘贴的 .torrent 链接:后端先下载链接转成种子再走 AddTorrent,也要等 */
+    torrentLink?: boolean;
 }
 
 /**
@@ -16,7 +18,10 @@ export interface PendingSelect {
  *
  * 种子上传:addTorrent(paused=true) 后任务已挂起,这里拉一次文件清单即可。
  * 磁力链:任务已在跑元数据(只有几 KB),轮询到真实文件后先 pause,再让
- * 用户勾选;确认后由父组件调 selectDownloadFiles 下发 select-file 并恢复。
+ * 用户勾选。
+ * .torrent 链接:后端先把链接下载转成种子并挂起,轮询到真实文件直接勾选
+ * (转换完成的任务就是挂起的,不用再 pause)。
+ * 确认后由父组件调 selectDownloadFiles 下发 select-file 并恢复。
  */
 export default function DownloadFileSelect({
     item,
@@ -38,6 +43,10 @@ export default function DownloadFileSelect({
     // 磁力等元数据的秒数:超过时限还没拿到就提示,不无限转圈
     const [elapsed, setElapsed] = useState(0);
     const MAGNET_TIMEOUT = 120;
+    // 磁力和 .torrent 链接都要等元数据/种子落地,共享长时限与秒数提示;
+    // 真正的磁力还要等元数据到手后先暂停,链接转出的种子本来就是挂起的
+    const waitMeta = item.magnet;
+    const waitLink = item.magnet && item.torrentLink;
 
     useEffect(() => {
         setFiles([]);
@@ -48,7 +57,7 @@ export default function DownloadFileSelect({
         setElapsed(0);
         let cancelled = false;
         let tries = 0;
-        // 种子添加后立刻就有清单;磁力要等元数据,给个时限免得永远转圈
+        // 种子添加后立刻就有清单;磁力/种子链接要等元数据,给个时限免得永远转圈
         const limit = item.magnet ? MAGNET_TIMEOUT : 8;
         const poll = async () => {
             if (cancelled) return;
@@ -66,8 +75,9 @@ export default function DownloadFileSelect({
                     setTimeout(poll, 1000);
                     return;
                 }
-                // 磁力:元数据就绪立刻暂停,等用户勾选完再恢复
-                if (item.magnet) {
+                // 磁力:元数据就绪立刻暂停,等用户勾选完再恢复(种子链接转出的
+                // 任务本来就在挂起,不用再 pause)
+                if (item.magnet && !item.torrentLink) {
                     await api.pauseDownload(item.gid).catch(() => undefined);
                     if (cancelled) return;
                 }
@@ -85,9 +95,9 @@ export default function DownloadFileSelect({
         return () => {
             cancelled = true;
         };
-    }, [item.gid, item.magnet, reload]);
+    }, [item.gid, item.magnet, item.torrentLink, reload]);
 
-    // 磁力:每秒累计等待时长,loading 文案里显示
+    // 磁力/种子链接:每秒累计等待时长,loading 文案里显示
     useEffect(() => {
         if (!item.magnet || !loading) return;
         const id = setInterval(() => setElapsed((e) => e + 1), 1000);
@@ -127,11 +137,13 @@ export default function DownloadFileSelect({
                 <div className="flex flex-col items-center gap-2 py-8 text-sm text-ink-soft">
                     <RefreshCw className="size-5 animate-spin" />
                     <span>
-                        {item.magnet
-                            ? `正在获取种子信息…(磁力要先下载元数据,已等 ${elapsed} 秒)`
-                            : '正在读取种子文件清单…'}
+                        {waitLink
+                            ? `正在把链接转成种子…(已从链接下载,已等 ${elapsed} 秒)`
+                            : waitMeta
+                              ? `正在获取种子信息…(磁力要先下载元数据,已等 ${elapsed} 秒)`
+                              : '正在读取种子文件清单…'}
                     </span>
-                    {item.magnet && elapsed >= 15 && (
+                    {waitMeta && !waitLink && elapsed >= 15 && (
                         <span className="text-xs max-w-md text-center leading-relaxed">
                             元数据由 PocketDrive 自己用 tracker 列表 + DHT 拉取,
                             通常几十秒内完成。迟迟拿不到多半是磁力没人做种,
@@ -142,12 +154,21 @@ export default function DownloadFileSelect({
             ) : failed ? (
                 <div className="flex flex-col items-center gap-3 py-6 text-sm text-ink-soft">
                     <span>
-                        {item.magnet
-                            ? '超过 2 分钟还没拿到种子信息。磁力没人做种、tracker 失效,'
-                              + '或 DHT 被防火墙挡了都可能这样。'
-                            : '没能拿到种子文件列表(aria2 可能暂时不可达)'}
+                        {waitLink
+                            ? '超过 2 分钟还没把链接转成种子。链接失效、服务器慢,'
+                              + '或返回的不是 .torrent 文件都可能这样。'
+                            : waitMeta
+                              ? '超过 2 分钟还没拿到种子信息。磁力没人做种、tracker 失效,'
+                                + '或 DHT 被防火墙挡了都可能这样。'
+                              : '没能拿到种子文件清单(aria2 可能暂时不可达)'}
                     </span>
-                    {item.magnet && (
+                    {waitLink && (
+                        <span className="text-xs max-w-md text-center leading-relaxed">
+                            建议:确认链接能直接下载一个 .torrent 文件;或改用 .torrent
+                            种子文件上传,通常更稳。
+                        </span>
+                    )}
+                    {waitMeta && !waitLink && (
                         <span className="text-xs max-w-md text-center leading-relaxed">
                             建议:如果这个磁力一直没人做种,换用 .torrent 种子文件
                             上传通常更快;或确认服务器能出网(tracker 需要外连)。

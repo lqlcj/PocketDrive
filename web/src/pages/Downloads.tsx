@@ -40,6 +40,15 @@ function fileToBase64(f: File): Promise<string> {
     });
 }
 
+/** http(s) 链接指向 .torrent 文件(带查询串也算) */
+function isTorrentLink(u: string): boolean {
+    try {
+        return new URL(u).pathname.toLowerCase().endsWith('.torrent');
+    } catch {
+        return false;
+    }
+}
+
 export default function Downloads() {
     const navigate = useNavigate();
     const [url, setUrl] = useState('');
@@ -82,9 +91,13 @@ export default function Downloads() {
         try {
             const r = await api.addDownload(u, dir);
             setUrl('');
-            if (u.startsWith('magnet:')) {
-                // 磁力:任务已进 aria2 拉元数据,弹框等清单出来再让用户勾选
-                setSelectQueue((q) => [...q, { gid: r.task.gid, magnet: true }]);
+            if (u.startsWith('magnet:') || isTorrentLink(u)) {
+                // 磁力 / .torrent 链接:任务已挂起,等元数据或后端把链接转成
+                // 种子,弹框等清单出来再让用户勾选
+                setSelectQueue((q) => [
+                    ...q,
+                    { gid: r.task.gid, magnet: true, torrentLink: isTorrentLink(u) },
+                ]);
             } else {
                 toast.success('任务已添加');
             }
@@ -197,11 +210,11 @@ export default function Downloads() {
             </div>
 
             <Card className="mb-4 flex flex-col gap-2.5">
-                <Input
-                    placeholder="粘贴 http(s)/ftp 直链或磁力链接 magnet:?xt=…"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                />
+<Input
+                        placeholder="粘贴 http(s)/ftp 直链、磁力链接或 .torrent 链接"
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                    />
                 <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex items-center gap-2 bg-paper-2 rounded-full px-3.5 py-1.5 min-w-48 flex-1">
                         <Folder className="size-4 text-ink-soft shrink-0" />
@@ -228,8 +241,8 @@ export default function Downloads() {
                     </Button>
                 </div>
                 <p className="text-xs text-ink-soft">
-                    支持直链 / 磁力,也可以直接上传 .torrent 种子文件(可多选)。
-                    种子和磁力会先弹框勾选要下载的文件,确认后才开始。
+                    支持直链 / 磁力 / .torrent 链接(链接会先转成种子),也可以直接上传
+                    .torrent 种子文件(可多选)。种子和磁力会先弹框勾选要下载的文件,确认后才开始。
                 </p>
             </Card>
 
@@ -301,7 +314,9 @@ export default function Downloads() {
                                             暂停
                                         </Button>
                                     )}
-                                    {t.status === 'paused' && !t.url.startsWith('magnet:') && (
+                                    {t.status === 'paused' &&
+                                        !t.url.startsWith('magnet:') &&
+                                        !isTorrentLink(t.url) && (
                                         <Button
                                             size="sm"
                                             onClick={() =>
