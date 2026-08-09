@@ -33,7 +33,9 @@ type Share struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	Token        string     `gorm:"uniqueIndex;size:32" json:"token"`
 	Path         string     `json:"path"`
-	Type         string     `json:"type"` // page(分享页) | direct(直链)
+	Type         string     `json:"type"` // page(文件分享页) | direct(直链) | text(文本分享页)
+	Content      string     `gorm:"type:text" json:"-"`
+	Summary      string     `gorm:"-" json:"summary,omitempty"`
 	PasswordHash string     `json:"-"`
 	HasPassword  bool       `json:"hasPassword"`
 	ExpiresAt    *time.Time `json:"expiresAt"`

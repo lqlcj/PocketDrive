@@ -62,7 +62,8 @@ export interface Share {
     id: number;
     token: string;
     path: string;
-    type: string; // page | direct
+    type: string; // page | direct | text
+    summary?: string;
     hasPassword: boolean;
     expiresAt: string | null;
     createdAt: string;
@@ -87,11 +88,13 @@ export interface IndexItem {
 }
 
 export interface ShareInfo {
+    type: 'file' | 'text';
     name: string;
     size: number;
     mtime: number;
     needPassword: boolean;
     expiresAt: string | null;
+    content?: string;
 }
 
 export interface Profile {
@@ -373,6 +376,13 @@ export const api = {
             path,
             password,
             type,
+            expiresHours,
+        }),
+    createTextShare: (content: string, password: string, expiresHours: number) =>
+        post<{ ok: boolean; share: Share }>('/api/v1/shares', {
+            type: 'text',
+            content,
+            password,
             expiresHours,
         }),
     deleteShare: (id: number) => post<{ ok: boolean }>('/api/v1/shares/delete', { id }),

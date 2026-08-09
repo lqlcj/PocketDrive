@@ -160,7 +160,7 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
                                 <Pencil className="size-3.5" /> 编辑
                             </Button>
                         </div>
-                        <div className="prose-island max-h-[62vh] overflow-auto">
+                        <div className="prose-island">
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
                         </div>
                     </div>

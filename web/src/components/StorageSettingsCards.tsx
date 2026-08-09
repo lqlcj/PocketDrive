@@ -13,8 +13,6 @@ import { Progress } from './ui/progress';
 export default function StorageSettingsCards({ profile }: { profile: Profile }) {
     const [recent, setRecent] = useState<RecentFile[]>([]);
     const [local, setLocal] = useState<LocalUsage | null>(null);
-    const [quotaGB, setQuotaGB] = useState('');
-    const [savingQuota, setSavingQuota] = useState(false);
     const [davDirect, setDavDirect] = useState<boolean | null>(null);
     // 与服务端默认值一致，加载期间不会把 WebDAV 误显示为关闭。
     const [davEnabled, setDavEnabled] = useState<boolean | null>(true);
@@ -27,9 +25,6 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
             .then((r) => {
                 setRecent(r.recent ?? []);
                 setLocal(r.local);
-                if (r.local.quota > 0) {
-                    setQuotaGB(String(Math.round((r.local.quota / 1024 ** 3) * 10) / 10));
-                }
             })
             .catch(() => undefined);
         api.cloudSettings()
@@ -42,25 +37,6 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
             })
             .catch(() => undefined);
     }, []);
-
-    const saveQuota = async () => {
-        const gb = quotaGB.trim() === '' ? 0 : Number(quotaGB);
-        if (!Number.isFinite(gb) || gb < 0) {
-            toast.warning('容量上限需为不小于 0 的数字');
-            return;
-        }
-        setSavingQuota(true);
-        try {
-            const r = await api.saveLocalQuota(gb);
-            setLocal((prev) => (prev ? { ...prev, quota: r.quota } : prev));
-            setQuotaGB(gb === 0 ? '' : String(gb));
-            toast.success(gb > 0 ? `已设置本机容量上限 ${gb} GB` : '已取消本机容量上限');
-        } catch (e) {
-            toast.error(e instanceof Error ? e.message : '保存失败');
-        } finally {
-            setSavingQuota(false);
-        }
-    };
 
     const toggleDavDirect = async (on: boolean) => {
         const previous = davDirect;
@@ -98,12 +74,12 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
 
     return (
         <>
-            <Card className="h-full min-h-0 overflow-hidden">
+            <Card className="h-full">
                 <CardTitle>最近修改</CardTitle>
                 {recent.length === 0 ? (
                     <p className="text-sm text-ink-soft">暂无最近修改的文件</p>
                 ) : (
-                    <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto pr-1">
+                    <div className="flex flex-col gap-1.5">
                         {recent.map((file) => (
                             <Link
                                 key={file.path}
@@ -127,7 +103,7 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
                 )}
             </Card>
 
-            <Card className="h-full flex flex-col">
+            <Card className="h-full">
                 <CardTitle>仓库容量</CardTitle>
                 {local === null ? (
                     <p className="text-sm text-ink-soft">读取中…</p>
@@ -151,29 +127,6 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
                         <span className="text-xs">(未设上限)</span>
                     </p>
                 )}
-                <div className="flex items-end gap-2 mt-auto pt-3 flex-wrap">
-                    <div className="flex-1 min-w-40">
-                        <label className="block text-xs font-bold text-ink-soft mb-1">
-                            容量上限(GB,0 或留空表示不限)
-                        </label>
-                        <Input
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={quotaGB}
-                            placeholder="例如 100"
-                            onChange={(e) => setQuotaGB(e.target.value)}
-                        />
-                    </div>
-                    <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={savingQuota}
-                        onClick={saveQuota}
-                    >
-                        {savingQuota ? '保存中…' : '保存'}
-                    </Button>
-                </div>
             </Card>
 
             <Card className="h-full">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Download, Leaf, Play, TreePalm } from 'lucide-react';
+import { Copy, Download, FileText, Github, Leaf, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { ShareInfo } from '../api';
@@ -8,7 +8,7 @@ import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import KindIcon from '../components/KindIcon';
-import { browserPlayable, fileKind, formatBytes, formatTime } from '../util';
+import { browserPlayable, copyText, fileKind, formatBytes, formatTime } from '../util';
 
 export default function SharePage() {
     const { token = '' } = useParams();
@@ -16,24 +16,42 @@ export default function SharePage() {
     const [error, setError] = useState<string | null>(null);
     const [password, setPassword] = useState('');
     const [unlocked, setUnlocked] = useState(false);
+    const [unlocking, setUnlocking] = useState(false);
     const [playing, setPlaying] = useState(false);
 
     useEffect(() => {
+        setInfo(null);
+        setError(null);
+        setPassword('');
+        setUnlocked(false);
+        setPlaying(false);
         api.shareInfo(token)
-            .then((r) => {
-                setInfo(r);
-                if (!r.needPassword) setUnlocked(true);
+            .then((result) => {
+                setInfo(result);
+                if (!result.needPassword) setUnlocked(true);
             })
             .catch((e) => setError(e instanceof Error ? e.message : '加载失败'));
     }, [token]);
 
     const unlock = async () => {
+        setUnlocking(true);
         try {
             await api.shareUnlock(token, password);
+            // 文本正文只会在通过密码验证后返回，因此解锁后重新取一次分享信息。
+            const result = await api.shareInfo(token);
+            setInfo(result);
             setUnlocked(true);
-        } catch {
-            toast.error('网络错误');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '解锁失败');
+        } finally {
+            setUnlocking(false);
         }
+    };
+
+    const copySharedText = async () => {
+        if (!info?.content) return;
+        if (await copyText(info.content)) toast.success('文本已复制');
+        else toast.warning('复制失败，请手动选中文本复制');
     };
 
     if (error) {
@@ -54,19 +72,26 @@ export default function SharePage() {
         );
     }
 
+    const isText = info.type === 'text';
     const kind = fileKind(info.name);
     const url = api.shareDownloadUrl(token);
     const thumb = api.shareThumbUrl(token);
 
     return (
         <div className="min-h-screen flex items-center justify-center px-4 py-8">
-            <Card className="w-full max-w-lg p-6">
+            <Card className={`w-full ${isText ? 'max-w-2xl' : 'max-w-lg'} p-6`}>
                 <div className="flex items-center gap-3">
-                    <KindIcon kind={kind} className="size-9" />
+                    {isText ? (
+                        <FileText className="size-9 text-leaf-dark shrink-0" />
+                    ) : (
+                        <KindIcon kind={kind} className="size-9" />
+                    )}
                     <div className="min-w-0">
                         <div className="font-extrabold text-lg break-all">{info.name}</div>
                         <div className="text-xs text-ink-soft">
-                            {formatBytes(info.size)} · {formatTime(info.mtime)}
+                            {isText
+                                ? `${info.size} 个字符 · ${formatTime(info.mtime)} 创建`
+                                : `${formatBytes(info.size)} · ${formatTime(info.mtime)}`}
                             {info.expiresAt && ` · ${formatTime(info.expiresAt)} 过期`}
                         </div>
                     </div>
@@ -79,10 +104,26 @@ export default function SharePage() {
                             placeholder="请输入提取密码"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && unlock()}
+                            onKeyDown={(e) => e.key === 'Enter' && !unlocking && unlock()}
                         />
-                        <Button variant="primary" onClick={unlock}>
-                            解锁
+                        <Button variant="primary" disabled={unlocking} onClick={unlock}>
+                            {unlocking ? '解锁中…' : '解锁'}
+                        </Button>
+                    </div>
+                ) : isText ? (
+                    <div className="mt-5">
+                        <div className="rounded-xl border border-line/70 bg-paper-2 p-4">
+                            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-7 text-ink">
+                                {info.content}
+                            </pre>
+                        </div>
+                        <Button
+                            variant="primary"
+                            className="w-full mt-4"
+                            disabled={info.content === undefined}
+                            onClick={copySharedText}
+                        >
+                            <Copy className="size-4" /> 复制文本
                         </Button>
                     </div>
                 ) : (
@@ -140,9 +181,14 @@ export default function SharePage() {
                         </a>
                     </div>
                 )}
-                <p className="text-center text-xs text-ink-soft mt-5 inline-flex items-center gap-1 justify-center w-full">
-                    <TreePalm className="size-3.5" /> 由 PocketDrive 分享
-                </p>
+                <a
+                    href="https://github.com/lqlcj/PocketDrive"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-center text-xs text-ink-soft mt-5 inline-flex items-center gap-1 justify-center w-full hover:text-leaf-dark transition-colors"
+                >
+                    <Github className="size-3.5" /> 由 PocketDrive 分享
+                </a>
             </Card>
         </div>
     );

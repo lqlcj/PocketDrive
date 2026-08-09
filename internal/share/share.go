@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -22,6 +23,8 @@ import (
 	"pocketdrive/internal/httpx"
 	"pocketdrive/internal/thumbs"
 )
+
+const maxTextChars = 20000
 
 type Service struct {
 	db     *gorm.DB
@@ -115,11 +118,41 @@ func (s *Service) Create(p, password, shareType string, expiresHours int) (*db.S
 		}
 	}
 	sh := db.Share{Token: randToken(10), Path: p, Type: shareType}
+	if err := prepareAccess(&sh, password, expiresHours); err != nil {
+		return nil, err
+	}
+	if err := s.db.Create(&sh).Error; err != nil {
+		return nil, err
+	}
+	return &sh, nil
+}
+
+// CreateText creates a share page whose payload lives in the share record
+// itself. It deliberately does not create a temporary file in the drive.
+func (s *Service) CreateText(content, password string, expiresHours int) (*db.Share, error) {
+	if strings.TrimSpace(content) == "" {
+		return nil, errors.New("分享文本不能为空")
+	}
+	if utf8.RuneCountInString(content) > maxTextChars {
+		return nil, errors.New("分享文本不能超过 20000 个字符")
+	}
+	sh := db.Share{Token: randToken(10), Type: "text", Content: content}
+	if err := prepareAccess(&sh, password, expiresHours); err != nil {
+		return nil, err
+	}
+	if err := s.db.Create(&sh).Error; err != nil {
+		return nil, err
+	}
+	sh.Summary = textSummary(content)
+	return &sh, nil
+}
+
+func prepareAccess(sh *db.Share, password string, expiresHours int) error {
 	// 直链是给播放器/下载工具直接用的,不支持密码
-	if password != "" && shareType == "page" {
+	if password != "" && sh.Type != "direct" {
 		hb, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sh.PasswordHash = string(hb)
 		sh.HasPassword = true
@@ -128,10 +161,17 @@ func (s *Service) Create(p, password, shareType string, expiresHours int) (*db.S
 		t := time.Now().Add(time.Duration(expiresHours) * time.Hour)
 		sh.ExpiresAt = &t
 	}
-	if err := s.db.Create(&sh).Error; err != nil {
-		return nil, err
+	return nil
+}
+
+func textSummary(content string) string {
+	// 管理列表只需要一小段可辨认的摘要；正文仍只在公开页通过权限检查后返回。
+	compact := strings.Join(strings.Fields(content), " ")
+	runes := []rune(compact)
+	if len(runes) > 72 {
+		return string(runes[:72]) + "…"
 	}
-	return &sh, nil
+	return compact
 }
 
 func (s *Service) expired(sh *db.Share) bool {
@@ -215,6 +255,11 @@ func (s *Service) authorized(r *http.Request, sh *db.Share) error {
 func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
 	var shares []db.Share
 	s.db.Order("created_at DESC").Find(&shares)
+	for i := range shares {
+		if shares[i].Type == "text" {
+			shares[i].Summary = textSummary(shares[i].Content)
+		}
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"shares": shares})
 }
 
@@ -223,13 +268,20 @@ func (s *Service) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Path         string `json:"path"`
 		Password     string `json:"password"`
 		Type         string `json:"type"`
+		Content      string `json:"content"`
 		ExpiresHours int    `json:"expiresHours"`
 	}
 	if err := httpx.Decode(r, &req); err != nil {
 		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	sh, err := s.Create(req.Path, req.Password, req.Type, req.ExpiresHours)
+	var sh *db.Share
+	var err error
+	if req.Type == "text" {
+		sh, err = s.CreateText(req.Content, req.Password, req.ExpiresHours)
+	} else {
+		sh, err = s.Create(req.Path, req.Password, req.Type, req.ExpiresHours)
+	}
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, err.Error())
 		return
@@ -285,16 +337,33 @@ func (s *Service) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, err.Error())
 		return
 	}
+	needPassword := s.authorized(r, sh) != nil
+	if sh.Type == "text" {
+		info := map[string]any{
+			"type":         "text",
+			"name":         "分享文本",
+			"size":         utf8.RuneCountInString(sh.Content),
+			"mtime":        sh.CreatedAt.UnixMilli(),
+			"needPassword": needPassword,
+			"expiresAt":    sh.ExpiresAt,
+		}
+		if !needPassword {
+			info["content"] = sh.Content
+		}
+		httpx.JSON(w, http.StatusOK, info)
+		return
+	}
 	if m, _, e, merr := s.mountStat(r.Context(), sh.Path); m != nil || merr != nil {
 		if merr != nil {
 			httpx.Err(w, http.StatusNotFound, merr.Error())
 			return
 		}
 		httpx.JSON(w, http.StatusOK, map[string]any{
+			"type":         "file",
 			"name":         e.Name,
 			"size":         e.Size,
 			"mtime":        e.Mtime,
-			"needPassword": sh.HasPassword,
+			"needPassword": needPassword,
 			"expiresAt":    sh.ExpiresAt,
 		})
 		return
@@ -305,10 +374,11 @@ func (s *Service) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
+		"type":         "file",
 		"name":         fi.Name(),
 		"size":         fi.Size(),
 		"mtime":        fi.ModTime().UnixMilli(),
-		"needPassword": sh.HasPassword,
+		"needPassword": needPassword,
 		"expiresAt":    sh.ExpiresAt,
 	})
 }
@@ -317,6 +387,10 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	sh, err := s.find(r.PathValue("token"))
 	if err != nil {
 		httpx.Err(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if sh.Type == "text" {
+		httpx.Err(w, http.StatusNotFound, "文本分享不提供文件下载")
 		return
 	}
 	if err := s.authorized(r, sh); err != nil {
@@ -360,6 +434,10 @@ func (s *Service) HandleThumb(w http.ResponseWriter, r *http.Request) {
 	sh, err := s.find(r.PathValue("token"))
 	if err != nil {
 		httpx.Err(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if sh.Type == "text" {
+		httpx.Err(w, http.StatusNotFound, "文本分享不提供缩略图")
 		return
 	}
 	if err := s.authorized(r, sh); err != nil {
