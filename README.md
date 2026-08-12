@@ -30,7 +30,7 @@
 两个进程常驻内存还没100M,RN,CC的小鸡再也不用吃灰了,线路鸡也可以利用起来了.
 <img width="917" height="330" alt="内存-min" src="https://github.com/user-attachments/assets/ad41ac05-d3ad-4856-a115-ec60fbe8116c" />
 
-上传下载全程流式,视频/音频播放走浏览器,不占内存;Office/PDF 预览在浏览器端渲染,
+上传下载全程流式,视频/音频播放走浏览器,不占内存;DOCX/PDF 预览在浏览器端渲染,
 服务器零额外开销。
 **视频只直连播放浏览器支持的格式**(mp4/webm 等);mkv/rmvb 在线预览不支持因为小内存装不下实时转码,这是刻意取舍。
 
@@ -39,9 +39,9 @@
 | 功能 |  |  |
 |---|---|---|
 | 文件管理 | WebDAV | 离线下载 |
-| 断点续传 | 在线压缩/解压 | 整盘导出/导入 |
-| 全局搜索 | 在线预览 | Markdown 笔记 |
-| 分享 | 黑夜模式 | 移动端响应式 |
+| 断点续传 | 在线压缩/解压 | 全局搜索 |
+| 在线预览 | Markdown 笔记 | 分享 |
+| 黑夜模式 | 移动端响应式 |  |
 
 
 
@@ -178,8 +178,7 @@ cd / && rm -rf /opt/pocketdrive
 docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
 ```
 
-删之前先在 **设置 → 备份与迁移 → 导出整盘备份** 下载一份,里面有网盘文件和
-配置库(含分享链接、下载历史、存储策略密钥),换机器时直接导入就能恢复。
+删之前如需保留数据,请先复制编排目录里的 `data/` 和 `config/` 两个目录。
 
 数据放在哪:
 
@@ -241,7 +240,7 @@ cd web; npm install; npm run dev
 - 登录失败限流:同 IP 连错 5 次封 5 分钟;WebDAV Basic Auth,bcrypt + 成功凭据缓存
 - 文件操作全部经 `os.Root`(Go 1.25+)防路径穿越/symlink 逃逸
 - aria2 通过 RPC 通信;上传的 .torrent 做 bencode 头校验 + 16MB 上限
-- Office 预览为纯前端渲染(docx-preview / SheetJS / pptx-preview 动态加载),后端不解析文档
+- DOCX 预览由 docx-preview 在前端渲染,后端不解析文档;XLS/XLSX/PPTX 请下载后本地打开
 
 ## 常见问题
 

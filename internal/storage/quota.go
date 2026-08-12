@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/disk"
+
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
 )
@@ -182,8 +184,18 @@ func (e *FullError) Error() string { return e.msg }
 
 // CheckLocal 在写入本机存储之前检查。size 未知时传 0(只判断是否已经满了)。
 func (s *Service) CheckLocal(size int64) error {
-	if size < 0 {
-		size = 0
+	return s.CheckLocalSpace(size, 0)
+}
+
+// CheckLocalSpace checks both the final increase in drive usage and temporary
+// disk demand. Atomic replacement and chunk staging need free disk even when
+// overwriting a file with another file of the same size.
+func (s *Service) CheckLocalSpace(additional, temporary int64) error {
+	if additional < 0 {
+		additional = 0
+	}
+	if temporary < 0 {
+		temporary = 0
 	}
 	// ① 用户设的上限
 	if q := s.Quota(); q > 0 {
@@ -196,18 +208,27 @@ func (s *Service) CheckLocal(size int64) error {
 		}
 		s.uMu.Unlock()
 		// 统计不出来就放行:软限制
-		if known && used+size > q {
+		if known && used+additional > q {
 			return &FullError{"本机存储已达到设置的容量上限(" +
 				human(q) + "),请先清理或调大上限"}
 		}
 	}
 	// ② 盘是不是真的快满了。这条不能软,写不进去就是写不进去
-	du, err := s.DiskUsage()
+	return s.CheckPathSpace(s.dataDir, temporary)
+}
+
+// CheckPathSpace enforces the physical reserve on an arbitrary local path.
+// Chunk staging may be placed next to the database instead of under dataDir.
+func (s *Service) CheckPathSpace(p string, temporary int64) error {
+	if temporary < 0 {
+		temporary = 0
+	}
+	u, err := disk.Usage(p)
 	if err != nil {
 		return nil
 	}
-	if int64(du.Free) < size+diskReserve {
-		return &FullError{"服务器磁盘空间不足(剩余 " + human(int64(du.Free)) +
+	if int64(u.Free) < temporary+diskReserve {
+		return &FullError{"服务器磁盘空间不足(剩余 " + human(int64(u.Free)) +
 			"),请先清理回收站或删掉一些文件"}
 	}
 	return nil

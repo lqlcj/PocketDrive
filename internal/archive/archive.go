@@ -1,4 +1,4 @@
-// Package archive 提供在线压缩/解压与整盘导出导入。
+// Package archive 提供在线压缩与解压。
 //
 // 压缩支持 zip 与 tar.gz;解压另外支持 tar.xz(xz 压缩太慢太吃内存,
 // 在 2G VPS 上不划算,所以只解不压)。大包耗时长,压缩/解压都做成异步
@@ -19,7 +19,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"pocketdrive/internal/auth"
 	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
@@ -38,23 +37,15 @@ type Service struct {
 	db    *gorm.DB
 	files *files.Service
 	cloud *cloud.Service
-	auth  *auth.Service
-
-	dbPath     string // 整盘导出要把配置库一起打包
-	appVersion string
 
 	running atomic.Int32
 }
 
-func New(gdb *gorm.DB, fs *files.Service, cs *cloud.Service, as *auth.Service,
-	dbPath, appVersion string) *Service {
+func New(gdb *gorm.DB, fs *files.Service, cs *cloud.Service) *Service {
 	// 上一轮没跑完的任务在重启后不会自动恢复,标记为失败而不是永远转圈
 	gdb.Model(&db.ArchiveTask{}).Where("status = ?", "running").
 		Updates(map[string]any{"status": "error", "error_msg": "服务重启,任务中断"})
-	return &Service{
-		db: gdb, files: fs, cloud: cs, auth: as,
-		dbPath: dbPath, appVersion: appVersion,
-	}
+	return &Service{db: gdb, files: fs, cloud: cs}
 }
 
 // ---- 任务记账 ----

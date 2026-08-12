@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -43,9 +42,9 @@ func (s *Service) resolve(p string) (vfs, string, error) {
 		if !ok {
 			return nil, "", errors.New("外部存储不存在或未挂载")
 		}
-		return mountFS{m}, rel, nil
+		return mountFS{m: m, svc: s.cloud}, rel, nil
 	}
-	return localFS{s.files.Root()}, p, nil
+	return localFS{s.files}, p, nil
 }
 
 // sameStore 判断两个路径是否在同一个存储里(跨存储的压缩/解压需要
@@ -67,7 +66,7 @@ func sameStore(a, b string) bool {
 
 // ---- 本机存储:全部经 os.Root,天然拒绝越出数据目录 ----
 
-type localFS struct{ root *os.Root }
+type localFS struct{ files *files.Service }
 
 // fsName 把干净路径转成 os.Root/fs.FS 期望的形式(根是 ".")。
 func fsName(p string) string {
@@ -78,7 +77,7 @@ func fsName(p string) string {
 }
 
 func (l localFS) stat(_ context.Context, p string) (entry, error) {
-	fi, err := l.root.Stat(fsName(p))
+	fi, err := l.files.Root().Stat(fsName(p))
 	if err != nil {
 		return entry{}, err
 	}
@@ -87,7 +86,7 @@ func (l localFS) stat(_ context.Context, p string) (entry, error) {
 
 func (l localFS) walkFiles(_ context.Context, p string, fn func(string, entry) error) error {
 	base := fsName(p)
-	return fs.WalkDir(l.root.FS(), base, func(name string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(l.files.Root().FS(), base, func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -112,37 +111,27 @@ func (l localFS) walkFiles(_ context.Context, p string, fn func(string, entry) e
 }
 
 func (l localFS) open(_ context.Context, p string) (io.ReadCloser, error) {
-	return l.root.Open(fsName(p))
+	return l.files.Root().Open(fsName(p))
 }
 
 func (l localFS) mkdirAll(_ context.Context, p string) error {
 	if p == "" {
 		return nil
 	}
-	return l.root.MkdirAll(p, 0o755)
+	return l.files.Root().MkdirAll(p, 0o755)
 }
 
-func (l localFS) create(_ context.Context, p string, r io.Reader, _ int64) error {
-	if dir := path.Dir(p); dir != "." && dir != "" {
-		if err := l.root.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	f, err := l.root.Create(p)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
-		_ = l.root.Remove(p)
-		return err
-	}
-	return f.Close()
+func (l localFS) create(ctx context.Context, p string, r io.Reader, size int64) error {
+	_, err := l.files.WriteLocalAtomic(ctx, p, r, size)
+	return err
 }
 
 // ---- 外部存储 ----
 
-type mountFS struct{ m *cloud.S3Mount }
+type mountFS struct {
+	m   *cloud.S3Mount
+	svc *cloud.Service
+}
 
 func (x mountFS) stat(ctx context.Context, p string) (entry, error) {
 	e, err := x.m.Stat(ctx, p)
@@ -180,5 +169,32 @@ func (x mountFS) mkdirAll(ctx context.Context, p string) error {
 }
 
 func (x mountFS) create(ctx context.Context, p string, r io.Reader, size int64) error {
-	return x.m.Put(ctx, p, r, size)
+	oldSize := int64(0)
+	if e, err := x.m.Stat(ctx, p); err == nil && !e.Dir {
+		oldSize = e.Size
+	}
+	additional := size - oldSize
+	if additional < 0 || size < 0 {
+		additional = 0
+	}
+	if err := x.svc.CheckQuota(x.m.Name, additional); err != nil {
+		return err
+	}
+	counted := &countReader{r: r}
+	if err := x.m.Put(ctx, p, counted, size); err != nil {
+		return err
+	}
+	x.svc.AddUsage(x.m.Name, counted.n-oldSize)
+	return nil
+}
+
+type countReader struct {
+	r io.Reader
+	n int64
+}
+
+func (r *countReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }

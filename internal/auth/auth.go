@@ -42,7 +42,7 @@ type Service struct {
 	secret        []byte
 	tokenVersion  int64
 	// configDir 存放自定义头像。刻意放在网盘目录之外:否则头像会出现
-	// 在文件列表和 WebDAV 里,还会被整盘备份带走
+	// 在文件列表和 WebDAV 里
 	configDir string
 
 	mu sync.Mutex

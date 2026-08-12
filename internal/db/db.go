@@ -14,14 +14,14 @@ type Setting struct {
 }
 
 type DownloadTask struct {
-	GID             string    `gorm:"column:gid;primaryKey;size:32" json:"gid"`
-	URL             string    `json:"url"`
-	Dir             string    `json:"dir"`
-	Name            string    `json:"name"`
-	Status          string    `json:"status"`
-	TotalLength     int64     `json:"totalLength"`
-	CompletedLength int64     `json:"completedLength"`
-	ErrorMsg        string    `json:"errorMsg"`
+	GID             string `gorm:"column:gid;primaryKey;size:32" json:"gid"`
+	URL             string `json:"url"`
+	Dir             string `json:"dir"`
+	Name            string `json:"name"`
+	Status          string `json:"status"`
+	TotalLength     int64  `json:"totalLength"`
+	CompletedLength int64  `json:"completedLength"`
+	ErrorMsg        string `json:"errorMsg"`
 	// 磁力链:元数据下载完成后 aria2 会 follow 出新 gid,新记录记下旧 gid,
 	// 前端拿着旧 gid 也能解析到当前任务
 	Follows   string    `json:"-"`
@@ -85,11 +85,13 @@ type UploadSession struct {
 	Path        string    // 目标完整路径,外部存储含 @挂载名
 	S3UploadID  string    // 仅外部存储:S3 Multipart 的 uploadId
 	ChunkSize   int64     // 分片大小不同则分片边界不同,会话不可复用
+	Size        int64     // 客户端声明的文件总大小;用于严格校验分片与预留容量
+	Reserved    int64     // 最终存储预计增加的字节;并发会话配额预留
 	CreatedAt   time.Time `gorm:"index"`
 }
 
 // ArchiveTask 是一次压缩或解压。大包耗时长,做成异步任务:前端轮询
-// 进度,刷新页面也不会丢。整盘导出走流式下载,不在这里记账。
+// 进度,刷新页面也不会丢。
 type ArchiveTask struct {
 	ID       uint   `gorm:"primaryKey" json:"id"`
 	Kind     string `gorm:"size:16" json:"kind"`   // compress | extract

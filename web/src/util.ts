@@ -98,11 +98,10 @@ export function shareLink(s: { token: string; type: string; path: string }): str
     return `${window.location.origin}/s/${s.token}`;
 }
 
-// Office 在线预览支持的格式(纯浏览器端渲染,服务器只出文件流)
+// 仅保留 DOCX 在线预览。XLS/XLSX/PPTX 的旧解析依赖存在已知安全漏洞。
 export function officePreviewable(name: string): boolean {
     const ext = name.split('.').pop()?.toLowerCase() ?? '';
-    // 旧二进制格式里只有 .xls 能被 SheetJS 解析;.doc/.ppt 不支持
-    return ['docx', 'xlsx', 'xls', 'pptx'].includes(ext);
+    return ext === 'docx';
 }
 
 /** 能不能在线解压。rar/7z 需要额外的二进制,没有做 */

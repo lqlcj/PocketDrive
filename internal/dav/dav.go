@@ -9,21 +9,23 @@ package dav
 
 import (
 	"net/http"
+	"os"
 	"path"
 	"strings"
 
 	"golang.org/x/net/webdav"
 
 	"pocketdrive/internal/cloud"
+	"pocketdrive/internal/files"
 )
 
 const prefix = "/dav"
 
-func Handler(dataDir string, cloudSvc *cloud.Service) http.Handler {
+func Handler(root *os.Root, cloudSvc *cloud.Service) http.Handler {
 	return &handler{
 		dav: &webdav.Handler{
 			Prefix:     prefix,
-			FileSystem: cloud.NewDavFS(cloudSvc, dataDir),
+			FileSystem: cloud.NewDavFSRoot(cloudSvc, root),
 			LockSystem: webdav.NewMemLS(),
 		},
 		cloud: cloudSvc,
@@ -36,6 +38,11 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// WebDAV shares the application origin. Never let an uploaded HTML/SVG/etc.
+	// execute in that origin when fetched with an ordinary browser GET.
+	if r.Method == http.MethodGet {
+		files.SetDownloadHeaders(w, path.Base(r.URL.Path), false, false)
+	}
 	// 只重定向 GET。HEAD 照旧本地应答:它不传 body,中转不花流量,而
 	// 客户端常拿 HEAD 探大小/类型——留在本地对不跟随重定向的客户端更友好。
 	if r.Method == http.MethodGet && h.redirectToBucket(w, r) {
@@ -72,7 +79,7 @@ func (h *handler) redirectToBucket(w http.ResponseWriter, r *http.Request) bool 
 	if e, err := m.Stat(r.Context(), rel); err != nil || e.Dir {
 		return false
 	}
-	u, err := m.PresignGet(r.Context(), rel, path.Base(rel), false)
+	u, err := m.PresignGet(r.Context(), rel, path.Base(rel), files.NeedsAttachment(rel))
 	if err != nil {
 		return false // 签名失败就退回中转,别让播放直接断掉
 	}

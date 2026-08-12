@@ -103,7 +103,12 @@ func TestE2EDavDirect(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Delete(context.Background(), rel) })
 
-	srv := httptest.NewServer(Handler(dataDir, svc))
+	rootFS, err := os.OpenRoot(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rootFS.Close()
+	srv := httptest.NewServer(Handler(rootFS, svc))
 	t.Cleanup(srv.Close)
 	davURL := srv.URL + "/dav/@" + e2eMount + "/" + rel
 

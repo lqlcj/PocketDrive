@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -36,11 +35,28 @@ import (
 )
 
 const (
-	maxChunkSize     = 32 << 20 // 单块上限 32MB
-	defaultChunkSize = 8 << 20  // 前端没报分片大小时的假设值
-	maxChunks        = 4096
-	tmpTTL           = 24 * time.Hour
+	maxChunkSize = 32 << 20 // 单块上限 32MB
+	maxChunks    = 4096
+	tmpTTL       = 24 * time.Hour
 )
+
+func expectedChunks(size, chunkSize int64) int64 {
+	if size <= 0 || chunkSize <= 0 {
+		return 0
+	}
+	return (size-1)/chunkSize + 1
+}
+
+func expectedChunkSize(us *db.UploadSession, index int) (int64, bool) {
+	chunks := expectedChunks(us.Size, us.ChunkSize)
+	if index < 0 || int64(index) >= chunks {
+		return 0, false
+	}
+	if int64(index) < chunks-1 {
+		return us.ChunkSize, true
+	}
+	return us.Size - int64(index)*us.ChunkSize, true
+}
 
 // 本机会话 32 位十六进制;外部存储会话多一个 s3 前缀
 var reUploadID = regexp.MustCompile(`^(s3)?[0-9a-f]{32}$`)
@@ -102,8 +118,11 @@ func (s *Service) uploadedParts(ctx context.Context, us *db.UploadSession) ([]in
 			return nil, err
 		}
 		out := make([]int, 0, len(parts))
-		for n := range parts {
-			out = append(out, n-1) // S3 Part 序号从 1 开始
+		for n, p := range parts {
+			expected, ok := expectedChunkSize(us, n-1)
+			if ok && p.Size == expected {
+				out = append(out, n-1) // S3 Part 序号从 1 开始
+			}
 		}
 		sort.Ints(out)
 		return out, nil
@@ -121,7 +140,11 @@ func (s *Service) uploadedParts(ctx context.Context, us *db.UploadSession) ([]in
 			continue
 		}
 		if n, err := strconv.Atoi(mm[1]); err == nil {
-			out = append(out, n)
+			expected, ok := expectedChunkSize(us, n)
+			info, statErr := e.Info()
+			if ok && statErr == nil && info.Size() == expected {
+				out = append(out, n)
+			}
 		}
 	}
 	sort.Ints(out)
@@ -174,8 +197,8 @@ func (s *Service) StartCleanup() {
 func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
-		// 下面三项用于识别「同一次上传」以支持断点续传;老前端不带也能工作,
-		// 只是每次都从头传
+		// 下面三项用于识别「同一次上传」以支持断点续传,也用于严格
+		// 校验分片边界与容量。
 		Size         int64 `json:"size"`
 		LastModified int64 `json:"lastModified"`
 		ChunkSize    int64 `json:"chunkSize"`
@@ -186,34 +209,43 @@ func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "缺少目标文件路径")
 		return
 	}
+	if req.Size <= 0 {
+		httpx.Err(w, http.StatusBadRequest, "缺少有效的文件大小")
+		return
+	}
 	if req.ChunkSize <= 0 || req.ChunkSize > maxChunkSize {
-		req.ChunkSize = defaultChunkSize
+		httpx.Err(w, http.StatusBadRequest, "分片大小无效")
+		return
+	}
+	if expectedChunks(req.Size, req.ChunkSize) > maxChunks {
+		httpx.Err(w, http.StatusRequestEntityTooLarge, "文件分片数量超过上限")
+		return
 	}
 
 	// 有指纹才谈得上续传:找回未过期的旧会话,把已传分片告诉前端
-	if req.Size > 0 {
-		fp := fingerprint(p, req.Size, req.LastModified, req.ChunkSize)
-		var old db.UploadSession
-		if s.db.First(&old, "fingerprint = ?", fp).Error == nil {
-			if time.Since(old.CreatedAt) < tmpTTL {
-				if uploaded, err := s.uploadedParts(r.Context(), &old); err == nil {
-					httpx.JSON(w, http.StatusOK, map[string]any{
-						"id": old.ID, "uploaded": uploaded, "chunkSize": old.ChunkSize,
-					})
-					return
-				}
+	fp := fingerprint(p, req.Size, req.LastModified, req.ChunkSize)
+	var old db.UploadSession
+	if s.db.First(&old, "fingerprint = ?", fp).Error == nil {
+		if time.Since(old.CreatedAt) < tmpTTL && old.Size == req.Size {
+			if uploaded, err := s.uploadedParts(r.Context(), &old); err == nil {
+				httpx.JSON(w, http.StatusOK, map[string]any{
+					"id": old.ID, "uploaded": uploaded, "chunkSize": old.ChunkSize,
+				})
+				return
 			}
-			// 过期,或对端已经把这次分片上传丢弃了 → 清掉重来
-			s.dropSession(r.Context(), &old)
 		}
+		// 过期,或对端已经把这次分片上传丢弃了 → 清掉重来
+		s.dropSession(r.Context(), &old)
 	}
 
-	us := db.UploadSession{Path: p, ChunkSize: req.ChunkSize, CreatedAt: time.Now()}
-	if req.Size > 0 {
-		us.Fingerprint = fingerprint(p, req.Size, req.LastModified, req.ChunkSize)
+	us := db.UploadSession{
+		Path: p, Size: req.Size, ChunkSize: req.ChunkSize,
+		Fingerprint: fp, CreatedAt: time.Now(),
 	}
 
 	if cloud.IsMountPath(p) {
+		s.sessionMu.Lock()
+		defer s.sessionMu.Unlock()
 		m, rel, bad := s.resolveMount(w, p)
 		if bad {
 			return
@@ -223,7 +255,16 @@ func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 分片上传的总大小是已知的,能提前把超配额的文件挡在门外
-		if err := s.cloud.CheckQuota(m.Name, req.Size); err != nil {
+		oldSize := int64(0)
+		if e, err := m.Stat(r.Context(), rel); err == nil && !e.Dir {
+			oldSize = e.Size
+		}
+		additional := req.Size - oldSize
+		if additional < 0 {
+			additional = 0
+		}
+		reserved := s.cloudReservations(m.Name, p, "", additional)
+		if err := s.cloud.CheckQuota(m.Name, reserved); err != nil {
 			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 			return
 		}
@@ -232,21 +273,24 @@ func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusBadGateway, "外部存储初始化分片失败: "+err.Error())
 			return
 		}
-		us.ID, us.S3UploadID = "s3"+randHex(), uploadID
+		us.ID, us.S3UploadID, us.Reserved = "s3"+randHex(), uploadID, additional
 	} else {
 		// 本机:总大小已知,动手之前就拦下装不下的;分片暂存在 tmpDir
 		// (DB 同级,不在网盘里),complete 落盘时才真正占网盘配额
-		if err := s.checkLocal(req.Size); err != nil {
+		if err := s.createLocalSession(&us); err != nil {
 			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 			return
 		}
-		us.ID = randHex()
-		if err := os.MkdirAll(filepath.Join(s.tmpDir, us.ID), 0o755); err != nil {
-			httpx.Err(w, http.StatusInternalServerError, err.Error())
+	}
+	if us.S3UploadID != "" {
+		err := s.db.Create(&us).Error
+		if err == nil {
+			httpx.JSON(w, http.StatusOK, map[string]any{
+				"id": us.ID, "uploaded": []int{}, "chunkSize": us.ChunkSize,
+			})
 			return
 		}
-	}
-	if err := s.db.Create(&us).Error; err != nil {
+		s.dropSession(r.Context(), &us)
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -266,6 +310,16 @@ func (s *Service) HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, "上传会话不存在或已过期")
 		return
 	}
+	expected, ok := expectedChunkSize(us, index)
+	if !ok {
+		httpx.Err(w, http.StatusBadRequest, "分片序号超出文件范围")
+		return
+	}
+	if r.ContentLength != expected {
+		httpx.Err(w, http.StatusBadRequest,
+			fmt.Sprintf("分片大小错误:应为 %d 字节", expected))
+		return
+	}
 
 	if us.S3UploadID != "" {
 		m, rel, ok := s.mountOf(us)
@@ -273,13 +327,9 @@ func (s *Service) HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusNotFound, "外部存储不存在或已卸载")
 			return
 		}
-		if r.ContentLength <= 0 || r.ContentLength > maxChunkSize {
-			httpx.Err(w, http.StatusBadRequest, "分片大小无效")
-			return
-		}
 		// S3 Part 序号从 1 开始;ETag 由 ListParts 在合并时取回,这里不必缓存
 		if _, err := m.MultipartPut(r.Context(), rel, us.S3UploadID,
-			index+1, io.LimitReader(r.Body, maxChunkSize), r.ContentLength); err != nil {
+			index+1, io.LimitReader(r.Body, expected), expected); err != nil {
 			httpx.Err(w, http.StatusBadGateway, "分片上传到外部存储失败: "+err.Error())
 			return
 		}
@@ -292,6 +342,10 @@ func (s *Service) HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, "上传会话不存在或已过期")
 		return
 	}
+	if err := s.checkPathSpace(s.tmpDir, s.localReservationsTemporary(expected)); err != nil {
+		httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+		return
+	}
 	// 先写临时名再改名:中断的块不会被误当成已传完的块跳过
 	part := filepath.Join(dir, fmt.Sprintf("part_%05d", index))
 	tmp := part + ".partial"
@@ -300,11 +354,11 @@ func (s *Service) HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	n, err := io.Copy(f, io.LimitReader(r.Body, maxChunkSize+1))
-	f.Close()
-	if err != nil || n > maxChunkSize {
+	n, err := io.Copy(f, io.LimitReader(r.Body, expected+1))
+	closeErr := f.Close()
+	if err != nil || closeErr != nil || n != expected {
 		os.Remove(tmp)
-		httpx.Err(w, http.StatusBadRequest, "分片写入失败或超过 32MB")
+		httpx.Err(w, http.StatusBadRequest, "分片写入失败或大小不正确")
 		return
 	}
 	if err := os.Rename(tmp, part); err != nil {
@@ -325,10 +379,6 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if req.Chunks <= 0 || req.Chunks > maxChunks {
-		httpx.Err(w, http.StatusBadRequest, "参数无效")
-		return
-	}
 	us, ok := s.findSession(req.ID)
 	if !ok {
 		httpx.Err(w, http.StatusNotFound, "上传会话不存在或已过期")
@@ -336,8 +386,15 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	// 目标路径以会话里记录的为准,客户端传的仅作兼容
 	p := us.Path
+	wantChunks := expectedChunks(us.Size, us.ChunkSize)
+	if wantChunks <= 0 || wantChunks > maxChunks || int64(req.Chunks) != wantChunks {
+		httpx.Err(w, http.StatusBadRequest, "分片数量与文件大小不一致")
+		return
+	}
 
 	if us.S3UploadID != "" {
+		s.sessionMu.Lock()
+		defer s.sessionMu.Unlock()
 		m, rel, ok := s.mountOf(us)
 		if !ok {
 			httpx.Err(w, http.StatusNotFound, "外部存储不存在或已卸载")
@@ -349,13 +406,37 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		parts := make([]minio.CompletePart, 0, req.Chunks)
+		var total int64
 		for i := 0; i < req.Chunks; i++ {
-			p, ok := uploaded[i+1]
+			part, ok := uploaded[i+1]
 			if !ok {
 				httpx.Err(w, http.StatusBadRequest, fmt.Sprintf("缺少分片 %d,请重传", i))
 				return
 			}
-			parts = append(parts, p)
+			expected, _ := expectedChunkSize(us, i)
+			if part.Size != expected {
+				httpx.Err(w, http.StatusBadRequest, fmt.Sprintf("分片 %d 大小不正确,请重传", i))
+				return
+			}
+			total += part.Size
+			parts = append(parts, minio.CompletePart{PartNumber: part.PartNumber, ETag: part.ETag})
+		}
+		if len(uploaded) != req.Chunks || total != us.Size {
+			httpx.Err(w, http.StatusBadRequest, "已传分片与声明文件大小不一致")
+			return
+		}
+		oldSize := int64(0)
+		if e, err := m.Stat(r.Context(), rel); err == nil && !e.Dir {
+			oldSize = e.Size
+		}
+		additional := us.Size - oldSize
+		if additional < 0 {
+			additional = 0
+		}
+		reserved := s.cloudReservations(m.Name, us.Path, us.ID, additional)
+		if err := s.cloud.CheckQuota(m.Name, reserved); err != nil {
+			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+			return
 		}
 		sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
 		if err := m.MultipartComplete(r.Context(), rel, us.S3UploadID, parts); err != nil {
@@ -368,54 +449,58 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusBadGateway, msg)
 			return
 		}
+		s.cloud.AddUsage(m.Name, us.Size-oldSize)
 		s.db.Delete(&db.UploadSession{}, "id = ?", us.ID)
 		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 
 	dir := filepath.Join(s.tmpDir, us.ID)
-	// 先校验所有分片齐全
+	// 先校验所有分片齐全且大小精确
+	var total int64
 	for i := 0; i < req.Chunks; i++ {
-		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("part_%05d", i))); err != nil {
+		fi, err := os.Stat(filepath.Join(dir, fmt.Sprintf("part_%05d", i)))
+		if err != nil {
 			httpx.Err(w, http.StatusBadRequest, fmt.Sprintf("缺少分片 %d,请重传", i))
 			return
 		}
-	}
-	if parent := path.Dir(p); parent != "." {
-		if err := s.root.MkdirAll(parent, 0o755); err != nil {
-			httpx.Err(w, http.StatusBadRequest, err.Error())
+		expected, _ := expectedChunkSize(us, i)
+		if fi.Size() != expected {
+			httpx.Err(w, http.StatusBadRequest, fmt.Sprintf("分片 %d 大小不正确,请重传", i))
 			return
 		}
+		total += fi.Size()
 	}
-	oldSize := s.localFileSize(p)
-	out, err := s.root.Create(p)
-	if err != nil {
-		httpx.Err(w, http.StatusBadRequest, err.Error())
+	if total != us.Size {
+		httpx.Err(w, http.StatusBadRequest, "分片总大小与声明文件大小不一致")
 		return
 	}
+	readers := make([]io.Reader, 0, req.Chunks)
+	opened := make([]*os.File, 0, req.Chunks)
 	for i := 0; i < req.Chunks; i++ {
 		part, err := os.Open(filepath.Join(dir, fmt.Sprintf("part_%05d", i)))
-		if err == nil {
-			_, err = io.Copy(out, part)
-			part.Close()
-		}
 		if err != nil {
-			out.Close()
-			_ = s.root.Remove(p)
-			httpx.Err(w, http.StatusInternalServerError, "拼接分片失败: "+err.Error())
+			for _, f := range opened {
+				f.Close()
+			}
+			httpx.Err(w, http.StatusInternalServerError, "读取分片失败: "+err.Error())
 			return
 		}
+		opened = append(opened, part)
+		readers = append(readers, part)
 	}
-	newSize := oldSize
-	if fi, err := out.Stat(); err == nil {
-		newSize = fi.Size()
+	_, _, err := s.atomicWrite(p, io.MultiReader(readers...), us.Size, us.ID)
+	for _, f := range opened {
+		f.Close()
 	}
-	if err := out.Close(); err != nil {
-		httpx.Err(w, http.StatusInternalServerError, err.Error())
+	if err != nil {
+		status := http.StatusInternalServerError
+		if isLocalCapacityError(err) {
+			status = http.StatusInsufficientStorage
+		}
+		httpx.Err(w, status, "拼接分片失败: "+err.Error())
 		return
 	}
-	s.AddUsage(newSize - oldSize)
-	_ = os.RemoveAll(dir)
-	s.db.Delete(&db.UploadSession{}, "id = ?", us.ID)
+	s.finishLocalSession(us)
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -13,9 +13,11 @@ type usageTracker struct {
 	delta int64
 }
 
-func (*usageTracker) CheckLocal(int64) error { return nil }
-func (u *usageTracker) AddUsage(delta int64) { u.delta += delta }
-func (*usageTracker) UploadLimit() int64     { return 0 }
+func (*usageTracker) CheckLocal(int64) error             { return nil }
+func (*usageTracker) CheckLocalSpace(int64, int64) error { return nil }
+func (*usageTracker) CheckPathSpace(string, int64) error { return nil }
+func (u *usageTracker) AddUsage(delta int64)             { u.delta += delta }
+func (*usageTracker) UploadLimit() int64                 { return 0 }
 
 func TestPermDeleteDirectoryAdjustsActualUsage(t *testing.T) {
 	root := t.TempDir()

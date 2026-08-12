@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +23,11 @@ import (
 	"pocketdrive/internal/thumbs"
 )
 
-const maxTextChars = 20000
+const (
+	maxTextChars = 20000
+	maxGrants    = 4096
+	grantTTL     = 15 * time.Minute
+)
 
 type Service struct {
 	db     *gorm.DB
@@ -250,6 +253,27 @@ func (s *Service) authorized(r *http.Request, sh *db.Share) error {
 	return nil
 }
 
+func (s *Service) addGrant(token, shareToken string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, g := range s.grants {
+		if !now.Before(g.expires) {
+			delete(s.grants, key)
+		}
+	}
+	if len(s.grants) >= maxGrants {
+		var oldestKey string
+		var oldest time.Time
+		for key, g := range s.grants {
+			if oldestKey == "" || g.expires.Before(oldest) {
+				oldestKey, oldest = key, g.expires
+			}
+		}
+		delete(s.grants, oldestKey)
+	}
+	s.grants[token] = grant{token: shareToken, expires: now.Add(grantTTL)}
+}
+
 // ---- authenticated handlers ----
 
 func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
@@ -303,14 +327,16 @@ func (s *Service) HandleUnlock(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	if !sh.HasPassword {
+		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if err := s.checkPassword(sh, req.Password, httpx.ClientIP(r)); err != nil {
 		httpx.Err(w, http.StatusForbidden, err.Error())
 		return
 	}
 	grantToken := randToken(32)
-	s.mu.Lock()
-	s.grants[grantToken] = grant{token: sh.Token, expires: time.Now().Add(15 * time.Minute)}
-	s.mu.Unlock()
+	s.addGrant(grantToken, sh.Token, time.Now())
 	http.SetCookie(w, &http.Cookie{Name: grantCookie(sh.Token), Value: grantToken,
 		Path: "/api/v1/public/share/" + sh.Token, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode, MaxAge: 15 * 60})
@@ -402,7 +428,8 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusNotFound, merr.Error())
 			return
 		}
-		u, perr := m.PresignGet(r.Context(), rel, e.Name, r.URL.Query().Get("dl") == "1")
+		u, perr := m.PresignGet(r.Context(), rel, e.Name,
+			r.URL.Query().Get("dl") == "1" || files.NeedsAttachment(e.Name))
 		if perr != nil {
 			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+perr.Error())
 			return
@@ -421,10 +448,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, "文件不可用")
 		return
 	}
-	if r.URL.Query().Get("dl") == "1" {
-		w.Header().Set("Content-Disposition",
-			"attachment; filename*=UTF-8''"+url.PathEscape(fi.Name()))
-	}
+	files.SetDownloadHeaders(w, fi.Name(), r.URL.Query().Get("dl") == "1", false)
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
@@ -467,7 +491,7 @@ func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusNotFound, merr.Error())
 			return
 		}
-		u, perr := m.PresignGet(r.Context(), rel, e.Name, false)
+		u, perr := m.PresignGet(r.Context(), rel, e.Name, files.NeedsAttachment(e.Name))
 		if perr != nil {
 			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+perr.Error())
 			return
@@ -486,12 +510,8 @@ func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusNotFound, "文件不可用")
 		return
 	}
-	// inline:浏览器/播放器直接打开;filename 让 wget/IDM 等保存时
-	// 用真实文件名(即使拿到的是不带文件名段的旧格式链接)
-	w.Header().Set("Content-Disposition",
-		"inline; filename*=UTF-8''"+url.PathEscape(fi.Name()))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	// 普通媒体仍可内联播放；主动网页内容会由统一策略强制下载并沙箱化。
+	files.SetDownloadHeaders(w, fi.Name(), false, true)
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 

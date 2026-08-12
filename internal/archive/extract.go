@@ -100,6 +100,9 @@ func (s *Service) runExtract(ctx context.Context, t *db.ArchiveTask) error {
 		if err := guard.entry(); err != nil {
 			return err
 		}
+		if size < 0 {
+			return errors.New("压缩包条目大小无效")
+		}
 		if err := guard.add(size); err != nil {
 			return err
 		}

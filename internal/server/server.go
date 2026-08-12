@@ -129,13 +129,11 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	// 本机容量上限,0 = 不限(与 S3 挂载的 quota 同一套语义)
 	api.HandleFunc("POST /api/v1/storage/quota", d.Storage.HandleSetQuota)
 
-	// 档案:压缩/解压是异步任务;整盘导出导入用于换 VPS 迁移
+	// 档案:压缩/解压是异步任务
 	api.HandleFunc("GET /api/v1/archive", d.Archive.HandleList)
 	api.HandleFunc("POST /api/v1/archive/compress", d.Archive.HandleCompress)
 	api.HandleFunc("POST /api/v1/archive/extract", d.Archive.HandleExtract)
 	api.HandleFunc("POST /api/v1/archive/delete", d.Archive.HandleDelete)
-	api.HandleFunc("GET /api/v1/admin/export", d.Archive.HandleExport)
-	api.HandleFunc("POST /api/v1/admin/import", d.Archive.HandleImport)
 
 	// 离线下载
 	registerDownloadRoutes(api, d.Aria2)
@@ -143,7 +141,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	mux.Handle("/api/v1/", d.Auth.Middleware(api))
 
 	// WebDAV: whole data dir + cloud mounts, Basic Auth (same admin account)
-	davHandler := d.Auth.BasicAuth(dav.Handler(cfg.DataDir, d.Cloud))
+	davHandler := d.Auth.BasicAuth(dav.Handler(d.Files.Root(), d.Cloud))
 	mux.Handle("/dav/", davHandler)
 	mux.Handle("/dav", davHandler)
 

@@ -118,6 +118,13 @@ func TestCheckLocalQuota(t *testing.T) {
 	}
 }
 
+func TestCheckLocalSpaceUsesTemporaryBytesForDiskOnly(t *testing.T) {
+	s, _ := newTestService(t)
+	if err := s.CheckLocalSpace(0, 1); err != nil {
+		t.Fatalf("small temporary write should pass: %v", err)
+	}
+}
+
 func TestHandleSetQuota(t *testing.T) {
 	s, _ := newTestService(t)
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"quotaGB":10}`))

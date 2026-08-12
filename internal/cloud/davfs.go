@@ -21,8 +21,10 @@ type DavFS struct {
 	local webdav.FileSystem
 }
 
-func NewDavFS(svc *Service, dataDir string) *DavFS {
-	return &DavFS{svc: svc, local: webdav.Dir(dataDir)}
+// NewDavFSRoot uses the same capability root as the files service, so WebDAV
+// cannot follow a symlink outside the drive. The caller owns root's lifetime.
+func NewDavFSRoot(svc *Service, root *os.Root) *DavFS {
+	return &DavFS{svc: svc, local: rootFS{root}}
 }
 
 var errPerm = errors.New("webdav: operation not supported on cloud storage")

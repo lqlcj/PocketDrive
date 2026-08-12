@@ -302,6 +302,9 @@ func (m *S3Mount) PresignGet(ctx context.Context, rel, filename string, attachme
 	params := url.Values{}
 	params.Set("response-content-disposition",
 		disp+"; filename*=UTF-8''"+url.PathEscape(filename))
+	if attachment {
+		params.Set("response-content-type", "application/octet-stream")
+	}
 	u, err := m.client.PresignedGetObject(ctx, m.bucket, m.key(rel), 4*time.Hour, params)
 	if err != nil {
 		return "", err
@@ -326,8 +329,8 @@ func (m *S3Mount) MultipartPut(ctx context.Context, rel, uploadID string, partNu
 // MultipartUploaded 列出该次分片上传里已经传成功的分片(PartNumber → 分片)。
 // 断点续传靠它决定哪些块可以跳过;合并时也直接取这里的 ETag,因此进程重启
 // 后依然能把传了一半的文件收尾——不需要在内存里缓存分片列表。
-func (m *S3Mount) MultipartUploaded(ctx context.Context, rel, uploadID string) (map[int]minio.CompletePart, error) {
-	out := make(map[int]minio.CompletePart)
+func (m *S3Mount) MultipartUploaded(ctx context.Context, rel, uploadID string) (map[int]minio.ObjectPart, error) {
+	out := make(map[int]minio.ObjectPart)
 	marker := 0
 	for {
 		res, err := m.core.ListObjectParts(ctx, m.bucket, m.key(rel), uploadID, marker, 1000)
@@ -335,7 +338,7 @@ func (m *S3Mount) MultipartUploaded(ctx context.Context, rel, uploadID string) (
 			return nil, err
 		}
 		for _, p := range res.ObjectParts {
-			out[p.PartNumber] = minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}
+			out[p.PartNumber] = p
 		}
 		if !res.IsTruncated {
 			return out, nil

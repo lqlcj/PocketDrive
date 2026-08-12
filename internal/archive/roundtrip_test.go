@@ -17,7 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"pocketdrive/internal/auth"
 	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
@@ -41,11 +40,7 @@ func testSvc(t *testing.T) *Service {
 		t.Fatalf("files.New: %v", err)
 	}
 	t.Cleanup(func() { fs.Root().Close() })
-	authSvc, err := auth.New(gdb, "admin", "test-password-123", tmp)
-	if err != nil {
-		t.Fatalf("auth.New: %v", err)
-	}
-	return New(gdb, fs, cloud.New(gdb), authSvc, filepath.Join(tmp, "test.db"), "test")
+	return New(gdb, fs, cloud.New(gdb))
 }
 
 func writeFile(t *testing.T, s *Service, p, content string) {
@@ -259,5 +254,20 @@ func TestExtractSkipsSymlinks(t *testing.T) {
 	got := tree(t, s, "out")
 	if len(got) != 1 || got[0] != "正常.txt" {
 		t.Fatalf("解压结果 = %v, want [正常.txt](链接被跳过)", got)
+	}
+}
+
+func TestLocalArchiveCreateKeepsOldFileOnShortInput(t *testing.T) {
+	s := testSvc(t)
+	writeFile(t, s, "target.txt", "old content")
+	local, rel, err := s.resolve("target.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.create(context.Background(), rel, strings.NewReader("short"), 20); err == nil {
+		t.Fatal("declared size mismatch should fail")
+	}
+	if got := readFile(t, s, "target.txt"); got != "old content" {
+		t.Fatalf("old target changed: %q", got)
 	}
 }

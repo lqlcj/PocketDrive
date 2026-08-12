@@ -33,11 +33,6 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	// 导入进来的配置库在这里顶替正式库——必须赶在 db.Open 之前
-	if err := archive.RestorePendingImport(cfg.DBPath); err != nil {
-		log.Fatalf("恢复导入的配置库: %v", err)
-	}
-
 	gdb, err := db.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("open db: %v", err)
@@ -75,7 +70,7 @@ func main() {
 
 	indexSvc := index.New(fileSvc.Root().FS())
 	iconsSvc := icons.New(gdb)
-	archiveSvc := archive.New(gdb, fileSvc, cloudSvc, authSvc, cfg.DBPath, config.Version)
+	archiveSvc := archive.New(gdb, fileSvc, cloudSvc)
 	srv := server.New(cfg, server.Deps{
 		Auth:    authSvc,
 		Files:   fileSvc,

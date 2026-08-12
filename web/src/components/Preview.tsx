@@ -191,7 +191,7 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose }
             body = officePreviewable(entry.name) ? (
                 <OfficePreview url={url} name={entry.name} />
             ) : (
-                downloadHint('旧版二进制格式(.doc/.ppt)暂不支持在线预览')
+                downloadHint('为避免在浏览器中解析不可信 Office 文件，此格式不提供在线预览')
             );
             break;
         default:

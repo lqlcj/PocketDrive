@@ -330,18 +330,6 @@ export const api = {
         post<{ ok: boolean; task: ArchiveTask }>('/api/v1/archive/extract', { path, dest }),
     deleteArchiveTask: (id: number) => post<{ ok: boolean }>('/api/v1/archive/delete', { id }),
 
-    exportUrl: () => '/api/v1/admin/export',
-    importBackup: async (file: File, password: string) => {
-        const resp = await fetch('/api/v1/admin/import', {
-            method: 'POST',
-            headers: { 'X-PD-Password': password },
-            body: file,
-        });
-        const body = await resp.json().catch(() => null);
-        if (!resp.ok) throw new ApiError(resp.status, body?.error ?? '导入失败');
-        return body as { ok: boolean; files: number; database: boolean; note: string };
-    },
-
     downloads: () =>
         req<{ degraded: boolean; tasks: DownloadTask[] }>('/api/v1/downloads'),
     addDownload: (url: string, dir: string) =>

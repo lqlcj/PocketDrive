@@ -2,11 +2,13 @@ package share
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/db"
@@ -189,5 +191,43 @@ func TestTextShareValidationAndListPrivacy(t *testing.T) {
 	}
 	if !strings.Contains(body, `"summary"`) {
 		t.Fatalf("list missing summary: %s", body)
+	}
+}
+
+func TestUnlockWithoutPasswordDoesNotCreateGrant(t *testing.T) {
+	svc := newLocalTestService(t)
+	share, err := svc.CreateText("公开文本", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		req := httptest.NewRequest(http.MethodPost, "/unlock", strings.NewReader(`{"password":""}`))
+		req.SetPathValue("token", share.Token)
+		w := httptest.NewRecorder()
+		svc.HandleUnlock(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("unlock → %d: %s", w.Code, w.Body.String())
+		}
+		if len(w.Result().Cookies()) != 0 {
+			t.Fatal("无密码分享不应设置 grant cookie")
+		}
+	}
+	if len(svc.grants) != 0 {
+		t.Fatalf("无密码 unlock 创建了 %d 个 grant", len(svc.grants))
+	}
+}
+
+func TestGrantMapIsBoundedAndPurgesExpired(t *testing.T) {
+	svc := newLocalTestService(t)
+	now := time.Now()
+	svc.grants["expired"] = grant{token: "old", expires: now.Add(-time.Minute)}
+	for i := 0; i < maxGrants+50; i++ {
+		svc.addGrant(fmt.Sprintf("g-%d", i), "share", now.Add(time.Duration(i)*time.Millisecond))
+	}
+	if _, ok := svc.grants["expired"]; ok {
+		t.Fatal("过期 grant 没有被清理")
+	}
+	if len(svc.grants) > maxGrants {
+		t.Fatalf("grant map = %d, want <= %d", len(svc.grants), maxGrants)
 	}
 }

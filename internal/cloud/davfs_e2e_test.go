@@ -68,9 +68,14 @@ func TestE2EWebDAV(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	localRoot, err := os.OpenRoot(localDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer localRoot.Close()
 	srv := httptest.NewServer(&webdav.Handler{
 		Prefix:     "/dav",
-		FileSystem: NewDavFS(svc, localDir),
+		FileSystem: NewDavFSRoot(svc, localRoot),
 		LockSystem: webdav.NewMemLS(),
 	})
 	defer srv.Close()

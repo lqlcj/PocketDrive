@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pocketdrive/internal/cloud"
@@ -36,7 +37,12 @@ func newTestHandler(t *testing.T) (http.Handler, string) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	return Handler(dataDir, cloud.New(gdb)), dataDir
+	root, err := os.OpenRoot(dataDir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	return Handler(root, cloud.New(gdb)), dataDir
 }
 
 func get(t *testing.T, h http.Handler, p string) *http.Response {
@@ -63,6 +69,27 @@ func TestLocalFileStillServed(t *testing.T) {
 	}
 }
 
+func TestActiveWebFileIsForcedAttachment(t *testing.T) {
+	h, dataDir := newTestHandler(t)
+	if err := os.WriteFile(filepath.Join(dataDir, "attack.html"), []byte("<script>alert(1)</script>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp := get(t, h, "/dav/attack.html")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "attachment;") {
+		t.Fatalf("disposition = %q", resp.Header.Get("Content-Disposition"))
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if !strings.Contains(resp.Header.Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("CSP = %q", resp.Header.Get("Content-Security-Policy"))
+	}
+}
+
 // 挂载不存在时不能瞎签名:应当落回 webdav 的 404,而不是把客户端
 // 甩到某个桶上。
 func TestUnknownMountNotRedirected(t *testing.T) {
@@ -85,5 +112,23 @@ func TestPropfindNotRedirected(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusMultiStatus {
 		t.Errorf("PROPFIND 状态码 = %d, want 207", w.Code)
+	}
+}
+
+func TestLocalSymlinkCannotEscapeDataRoot(t *testing.T) {
+	h, dataDir := newTestHandler(t)
+	outside := filepath.Join(filepath.Dir(dataDir), "outside-secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dataDir, "escape.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("当前环境不能创建符号链接: %v", err)
+	}
+	resp := get(t, h, "/dav/escape.txt")
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("WebDAV 读出了数据目录外的文件: %q", body)
 	}
 }

@@ -1,32 +1,37 @@
 package files
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"gorm.io/gorm"
 
 	"pocketdrive/internal/cloud"
+	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
 )
 
 const maxTextPreview = 2 << 20 // 2 MiB
 
 type Service struct {
-	root    *os.Root
-	DataDir string
-	tmpDir  string // 分片上传暂存目录(DB 同级,不在网盘里)
-	cloud   *cloud.Service
-	db      *gorm.DB // 分片上传会话(断点续传需要跨请求/跨重启存活)
-	space   LocalSpace
+	root      *os.Root
+	DataDir   string
+	tmpDir    string // 分片上传暂存目录(DB 同级,不在网盘里)
+	cloud     *cloud.Service
+	db        *gorm.DB // 分片上传会话(断点续传需要跨请求/跨重启存活)
+	space     LocalSpace
+	writeMu   sync.Mutex // serializes local capacity checks with atomic writes/reservations
+	sessionMu sync.Mutex // serializes cloud multipart quota reservations and completion
 }
 
 // LocalSpace 是本机容量检查的钩子,由 internal/storage 实现。
@@ -36,11 +41,26 @@ type Service struct {
 type LocalSpace interface {
 	// CheckLocal 在写入前判断还装不装得下;size 未知时传 0
 	CheckLocal(size int64) error
+	// CheckLocalSpace separates final drive usage from temporary disk demand.
+	CheckLocalSpace(additional, temporary int64) error
+	// CheckPathSpace protects temporary files that may live on a different
+	// filesystem from the drive data directory.
+	CheckPathSpace(path string, temporary int64) error
 	// AddUsage 写完就地累加,免得等下一轮全量统计
 	AddUsage(delta int64)
 	// UploadLimit returns the maximum request body size allowed for a local upload.
 	// Zero means no configured quota.
 	UploadLimit() int64
+}
+
+type localCapacityError struct{ err error }
+
+func (e *localCapacityError) Error() string { return e.err.Error() }
+func (e *localCapacityError) Unwrap() error { return e.err }
+
+func isLocalCapacityError(err error) bool {
+	var target *localCapacityError
+	return errors.As(err, &target)
 }
 
 // SetLocalSpace 在 storage 构造好之后回填。没设时所有检查都放行。
@@ -50,7 +70,203 @@ func (s *Service) checkLocal(size int64) error {
 	if s.space == nil {
 		return nil
 	}
-	return s.space.CheckLocal(size)
+	if err := s.space.CheckLocal(size); err != nil {
+		return &localCapacityError{err}
+	}
+	return nil
+}
+
+func (s *Service) checkLocalSpace(additional, temporary int64) error {
+	if s.space == nil {
+		return nil
+	}
+	if err := s.space.CheckLocalSpace(additional, temporary); err != nil {
+		return &localCapacityError{err}
+	}
+	return nil
+}
+
+func (s *Service) checkPathSpace(p string, temporary int64) error {
+	if s.space == nil {
+		return nil
+	}
+	if err := s.space.CheckPathSpace(p, temporary); err != nil {
+		return &localCapacityError{err}
+	}
+	return nil
+}
+
+func (s *Service) localReservations(excludeSession string) (int64, int64, int64) {
+	if s.db == nil {
+		return 0, 0, 0
+	}
+	var sessions []db.UploadSession
+	q := s.db.Where("s3_upload_id = ''")
+	if excludeSession != "" {
+		q = q.Where("id <> ?", excludeSession)
+	}
+	if q.Find(&sessions).Error != nil {
+		return 0, 0, 0
+	}
+	// Multiple sessions targeting the same path cannot all increase final
+	// usage; only the largest replacement for that path can survive. Temporary
+	// staging, however, is additive for every session.
+	byPath := make(map[string]int64)
+	var dataTemporary, stagingRemaining int64
+	for i := range sessions {
+		old := s.localFileSize(sessions[i].Path)
+		if delta := sessions[i].Size - old; delta > byPath[sessions[i].Path] {
+			byPath[sessions[i].Path] = delta
+		}
+		// Completion is serialized, but every accepted session may eventually
+		// leave a final file behind before the next session gets its turn. Keep
+		// the full atomic-assembly demand reserved on the data filesystem even
+		// after chunks have already been staged elsewhere.
+		dataTemporary += sessions[i].Size
+		staged := s.stagedSize(sessions[i].ID)
+		if staged < sessions[i].Size {
+			stagingRemaining += sessions[i].Size - staged
+		}
+	}
+	var additional int64
+	for _, delta := range byPath {
+		additional += delta
+	}
+	return additional, dataTemporary, stagingRemaining
+}
+
+func (s *Service) stagedSize(id string) int64 {
+	entries, err := os.ReadDir(filepath.Join(s.tmpDir, id))
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
+}
+
+func (s *Service) localReservationsTemporary(incoming int64) int64 {
+	_, _, remaining := s.localReservations("")
+	if remaining < incoming {
+		return incoming
+	}
+	return remaining
+}
+
+func (s *Service) checkLocalWithReservations(additional, temporary int64, excludeSession string) error {
+	reservedAdditional, reservedTemporary, _ := s.localReservations(excludeSession)
+	if err := s.checkLocalSpace(additional+reservedAdditional, temporary+reservedTemporary); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) createLocalSession(us *db.UploadSession) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	additional := us.Size - s.localFileSize(us.Path)
+	if additional < 0 {
+		additional = 0
+	}
+	reservedAdditional, reservedTemporary, reservedStaging := s.localReservations("")
+	if current := s.reservedForPath(us.Path, ""); current > 0 {
+		reservedAdditional -= current
+		if additional < current {
+			additional = current
+		}
+	}
+	if err := s.checkLocalSpace(additional+reservedAdditional, us.Size+reservedTemporary); err != nil {
+		return err
+	}
+	if err := s.checkPathSpace(s.tmpDir, us.Size+reservedStaging); err != nil {
+		return err
+	}
+	us.ID = randHex()
+	dir := filepath.Join(s.tmpDir, us.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := s.db.Create(us).Error; err != nil {
+		_ = os.RemoveAll(dir)
+		return err
+	}
+	return nil
+}
+
+func (s *Service) reservedForPath(p, excludeSession string) int64 {
+	if s.db == nil {
+		return 0
+	}
+	var sessions []db.UploadSession
+	q := s.db.Where("s3_upload_id = '' AND path = ?", p)
+	if excludeSession != "" {
+		q = q.Where("id <> ?", excludeSession)
+	}
+	if q.Find(&sessions).Error != nil {
+		return 0
+	}
+	old := s.localFileSize(p)
+	var largest int64
+	for i := range sessions {
+		if delta := sessions[i].Size - old; delta > largest {
+			largest = delta
+		}
+	}
+	return largest
+}
+
+func mountName(p string) string {
+	p = CleanPath(p)
+	if !cloud.IsMountPath(p) {
+		return ""
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(p, cloud.MountPrefix), "/")
+	return name
+}
+
+func (s *Service) cloudReservations(name, candidatePath, excludeSession string, candidate int64) int64 {
+	if s.db == nil {
+		return candidate
+	}
+	var sessions []db.UploadSession
+	q := s.db.Where("s3_upload_id <> ''")
+	if excludeSession != "" {
+		q = q.Where("id <> ?", excludeSession)
+	}
+	if q.Find(&sessions).Error != nil {
+		return candidate
+	}
+	byPath := make(map[string]int64)
+	for i := range sessions {
+		if mountName(sessions[i].Path) != name {
+			continue
+		}
+		if sessions[i].Reserved > byPath[sessions[i].Path] {
+			byPath[sessions[i].Path] = sessions[i].Reserved
+		}
+	}
+	if candidate > byPath[candidatePath] {
+		byPath[candidatePath] = candidate
+	}
+	var total int64
+	for _, n := range byPath {
+		total += n
+	}
+	return total
+}
+
+func (s *Service) finishLocalSession(us *db.UploadSession) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_ = os.RemoveAll(filepath.Join(s.tmpDir, us.ID))
+	s.db.Delete(&db.UploadSession{}, "id = ?", us.ID)
 }
 
 func (s *Service) AddUsage(delta int64) {
@@ -65,6 +281,132 @@ func (s *Service) localFileSize(p string) int64 {
 		return 0
 	}
 	return fi.Size()
+}
+
+// atomicWrite writes through a same-directory temporary file and validates an
+// optional exact size before replacing the destination. excludeSession is used
+// while completing a chunked upload so that session's reservation is not
+// counted twice.
+func (s *Service) atomicWrite(p string, r io.Reader, expected int64, excludeSession string) (int64, int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.atomicWriteLocked(p, r, expected, excludeSession)
+}
+
+func (s *Service) atomicWriteLocked(p string, r io.Reader, expected int64, excludeSession string) (int64, int64, error) {
+	p = CleanPath(p)
+	if p == "" {
+		return 0, 0, errors.New("路径不能为空")
+	}
+	if parent := path.Dir(p); parent != "." {
+		if err := s.root.MkdirAll(parent, 0o755); err != nil {
+			return 0, 0, err
+		}
+	}
+	oldSize := s.localFileSize(p)
+	if expected >= 0 {
+		additional := expected - oldSize
+		if additional < 0 {
+			additional = 0
+		}
+		if err := s.checkLocalWithReservations(additional, expected, excludeSession); err != nil {
+			return 0, 0, err
+		}
+	}
+	tmp := path.Join(path.Dir(p), ".pd-write-"+randHex()+".tmp")
+	if path.Dir(p) == "." {
+		tmp = ".pd-write-" + randHex() + ".tmp"
+	}
+	f, err := s.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return 0, 0, err
+	}
+	cleanup := func() {
+		_ = f.Close()
+		_ = s.root.Remove(tmp)
+	}
+	var n int64
+	buf := make([]byte, 1<<20)
+	for {
+		nr, readErr := r.Read(buf)
+		if nr > 0 {
+			if expected >= 0 && n+int64(nr) > expected {
+				cleanup()
+				return 0, 0, errors.New("写入内容超过声明大小")
+			}
+			if expected < 0 {
+				additional := n + int64(nr) - oldSize
+				if additional < 0 {
+					additional = 0
+				}
+				if err := s.checkLocalWithReservations(additional, n+int64(nr), excludeSession); err != nil {
+					cleanup()
+					return 0, 0, err
+				}
+			}
+			nw, writeErr := f.Write(buf[:nr])
+			n += int64(nw)
+			if writeErr != nil {
+				cleanup()
+				return 0, 0, writeErr
+			}
+			if nw != nr {
+				cleanup()
+				return 0, 0, io.ErrShortWrite
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			cleanup()
+			return 0, 0, readErr
+		}
+	}
+	if expected >= 0 && n != expected {
+		cleanup()
+		return 0, 0, errors.New("写入内容大小与声明不一致")
+	}
+	if err := f.Sync(); err != nil {
+		cleanup()
+		return 0, 0, err
+	}
+	if err := f.Close(); err != nil {
+		_ = s.root.Remove(tmp)
+		return 0, 0, err
+	}
+	if err := s.root.Rename(tmp, p); err != nil {
+		_ = s.root.Remove(tmp)
+		return 0, 0, err
+	}
+	s.AddUsage(n - oldSize)
+	return n, oldSize, nil
+}
+
+// WriteLocalAtomic is used by archive extraction as well as uploads. The
+// declared size is checked before writing; the actual size is capped and
+// checked again so a dishonest archive header cannot fill the disk.
+func (s *Service) WriteLocalAtomic(ctx context.Context, p string, r io.Reader, size int64) (int64, error) {
+	cr := &contextReader{ctx: ctx, r: r}
+	n, old, err := s.atomicWrite(p, cr, size, "")
+	if err != nil {
+		return 0, err
+	}
+	return n - old, nil
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.r.Read(p)
+	}
 }
 
 func New(dataDir, tmpDir string, cloudSvc *cloud.Service, gdb *gorm.DB) (*Service, error) {
@@ -266,13 +608,6 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// 整个请求的大小是已知的,能在动手之前就把装不下的挡回去
-	if mnt == nil && r.ContentLength > 0 {
-		if err := s.checkLocal(r.ContentLength); err != nil {
-			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
-			return
-		}
-	}
 	// 配额是软限制:知道还剩多少时,用 MaxBytesReader 把请求体限制在剩余
 	// 额度内。必须先包好 Body 再 MultipartReader——Go 1.21+ 里对同一个
 	// Request 第二次调用 MultipartReader 会报 "called twice"。
@@ -308,26 +643,36 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 				return
 			}
+			target := path.Join(mntRel, name)
+			oldSize := int64(0)
+			if e, statErr := mnt.Stat(r.Context(), target); statErr == nil && !e.Dir {
+				oldSize = e.Size
+			}
 			// 中转直推 S3:size 未知走流式 multipart(8MB 内存缓冲)
-			err = mnt.Put(r.Context(), path.Join(mntRel, name), part, -1)
+			counted := &byteCounter{r: part}
+			err = mnt.Put(r.Context(), target, counted, -1)
 			if err != nil {
 				part.Close()
 				httpx.Err(w, http.StatusBadGateway, "上传到外部存储失败: "+err.Error())
 				return
 			}
+			s.cloud.AddUsage(mnt.Name, counted.n-oldSize)
 		} else {
 			if err := s.checkLocal(0); err != nil {
 				part.Close()
 				httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 				return
 			}
-			delta, err := s.savePart(path.Join(dir, name), part)
+			_, err := s.savePart(path.Join(dir, name), part)
 			if err != nil {
 				part.Close()
-				httpx.Err(w, http.StatusInternalServerError, "保存上传文件失败")
+				status := http.StatusInternalServerError
+				if isLocalCapacityError(err) {
+					status = http.StatusInsufficientStorage
+				}
+				httpx.Err(w, status, "保存上传文件失败: "+err.Error())
 				return
 			}
-			s.AddUsage(delta)
 		}
 		part.Close()
 		saved = append(saved, name)
@@ -336,17 +681,8 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) savePart(p string, part *multipart.Part) (int64, error) {
-	oldSize := s.localFileSize(p)
-	f, err := s.root.Create(p)
-	if err != nil {
-		return 0, err
-	}
-	n, err := io.Copy(f, part)
-	if err != nil {
-		f.Close()
-		return 0, err
-	}
-	return n - oldSize, f.Close()
+	n, oldSize, err := s.atomicWrite(p, part, -1, "")
+	return n - oldSize, err
 }
 
 func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +699,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		// 302 到预签名 URL:浏览器/播放器直连存储桶,不过 VPS 中转,
 		// 媒体加载不受同源策略限制,无需给桶配任何 CORS
 		u, err := m.PresignGet(r.Context(), rel, path.Base(rel),
-			r.URL.Query().Get("dl") == "1")
+			r.URL.Query().Get("dl") == "1" || NeedsAttachment(path.Base(rel)))
 		if err != nil {
 			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+err.Error())
 			return
@@ -382,10 +718,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "不是文件")
 		return
 	}
-	if r.URL.Query().Get("dl") == "1" {
-		w.Header().Set("Content-Disposition",
-			"attachment; filename*=UTF-8''"+url.PathEscape(fi.Name()))
-	}
+	SetDownloadHeaders(w, fi.Name(), r.URL.Query().Get("dl") == "1", false)
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
@@ -462,11 +795,24 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusBadRequest, "不能往挂载点根写入空路径")
 			return
 		}
+		oldSize := int64(0)
+		if e, err := m.Stat(r.Context(), rel); err == nil && !e.Dir {
+			oldSize = e.Size
+		}
+		additional := int64(len(req.Content)) - oldSize
+		if additional < 0 {
+			additional = 0
+		}
+		if err := s.cloud.CheckQuota(m.Name, additional); err != nil {
+			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
+			return
+		}
 		if err := m.Put(r.Context(), rel, strings.NewReader(req.Content),
 			int64(len(req.Content))); err != nil {
 			httpx.Err(w, http.StatusBadGateway, "写入外部存储失败: "+err.Error())
 			return
 		}
+		s.cloud.AddUsage(m.Name, int64(len(req.Content))-oldSize)
 		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
@@ -484,22 +830,27 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	f, err := s.root.Create(p)
+	_, _, err = s.atomicWrite(p, strings.NewReader(req.Content), int64(len(req.Content)), "")
 	if err != nil {
-		httpx.Err(w, http.StatusBadRequest, err.Error())
+		status := http.StatusInternalServerError
+		if isLocalCapacityError(err) {
+			status = http.StatusInsufficientStorage
+		}
+		httpx.Err(w, status, err.Error())
 		return
 	}
-	if _, err := f.WriteString(req.Content); err != nil {
-		f.Close()
-		httpx.Err(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := f.Close(); err != nil {
-		httpx.Err(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.AddUsage(delta)
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+type byteCounter struct {
+	r io.Reader
+	n int64
+}
+
+func (r *byteCounter) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }
 
 func (s *Service) HandleRename(w http.ResponseWriter, r *http.Request) {
