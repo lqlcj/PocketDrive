@@ -14,6 +14,7 @@ package aria2
 
 import (
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,17 @@ func (m *Manager) filesOf(t *db.DownloadTask) []string {
 	return out
 }
 
+// under 报告 child 是否严格位于 parent 内部。按路径分段比较,不是字符串
+// 前缀:/data/影视2 并不在 /data/影视 里面,拿 HasPrefix 判会误伤。
+func under(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
 // deleteFiles 删掉任务产出的文件,并把因此空掉的目录收拾干净
 //（BT 种子通常会建一层以种子名命名的文件夹)。
 // 返回删掉的条目数。
@@ -103,6 +115,7 @@ func (m *Manager) deleteFiles(paths []string, taskDir string) int {
 		// .aria2 是断点续传的控制文件,和数据文件同名加后缀
 		_ = os.Remove(p + ".aria2")
 		if err := os.RemoveAll(p); err == nil {
+			log.Printf("[删除] 离线下载任务的文件 %s", p)
 			n++
 		}
 	}
@@ -114,10 +127,11 @@ func (m *Manager) deleteFiles(paths []string, taskDir string) int {
 	}
 	for _, p := range paths {
 		dir := filepath.Dir(p)
-		for len(dir) > len(stop) && strings.HasPrefix(dir, stop) {
+		for under(stop, dir) {
 			if os.Remove(dir) != nil {
 				break
 			}
+			log.Printf("[删除] 随任务清掉的空目录 %s", dir)
 			dir = filepath.Dir(dir)
 		}
 	}

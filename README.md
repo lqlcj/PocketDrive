@@ -244,6 +244,33 @@ cd web; npm install; npm run dev
 
 ## 常见问题
 
+**文件夹/下载好的东西过几天自己没了**
+
+PocketDrive 自己只在两个地方定时删东西:回收站里超过 **30 天**的条目,以及
+上传暂存目录里超过 **24 小时**的残片(只认自己生成的 32 位十六进制目录名,
+别的一概不碰)。除此之外的删除都必须由人触发。
+
+所以先看日志,一眼就能分清是不是它干的:
+
+```bash
+docker logs --since 168h pocketdrive | grep -E "\[删除\]|\[清理\]|\[消失\]"
+```
+
+* `[删除]` / `[清理]` —— PocketDrive 删的,行里写明了入口(网页、回收站、
+  30 天到期、WebDAV、离线下载任务)
+* 只有 `[消失]` 没有对应的 `[删除]` —— **不是 PocketDrive 删的**。哨兵每 30
+  分钟给网盘拍一次快照,只报少掉的条目。这种情况去查三个地方:
+  1. 编排里 `/data` 是不是绑到了宿主机目录(而不是匿名卷)。匿名卷会被
+     `docker system prune --volumes` 和面板的「清理无用卷」一起带走:
+     `docker inspect pocketdrive --format '{{json .Mounts}}'`
+  2. aria2 容器有没有配「下载完成/停止就删文件」的钩子:
+     `grep -nE '^\s*on-(download|bt-download)' config/aria2/aria2.conf`
+  3. 服务器上的定时清理任务(面板的计划任务、`crontab -l`、`/etc/cron.daily/`)
+
+另外别把 `POCKETDRIVE_DB` 指进网盘目录(如 `/data/pocketdrive.db`)。那样
+上传暂存目录会变成网盘里一个看得见的普通文件夹,而它带自动清理。真这么配了
+的话,启动日志里会有警告,内部目录会自动改用隐藏的 `.pocketdrive/`。
+
 **离线下载报 `Download aborted.`,BT 报 `Failed to make the directory ..., cause: Permission denied`**
 
 aria2 容器写不进网盘目录。`p3terx/aria2-pro` 镜像里 aria2c 固定以 `p3terx`

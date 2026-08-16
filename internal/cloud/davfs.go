@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path"
 	"strings"
@@ -61,16 +62,21 @@ func (d *DavFS) Mkdir(ctx context.Context, name string, perm os.FileMode) error 
 	return d.local.Mkdir(ctx, name, perm)
 }
 
+// RemoveAll 是 WebDAV 侧唯一的删除入口。挂了同步类客户端的话,客户端
+// 单方面的"同步"也会走到这里,而且不进回收站——记一行日志,事后能查清
+// 到底是谁把文件删掉的。
 func (d *DavFS) RemoveAll(ctx context.Context, name string) error {
 	if m, rel, ok := d.split(name); ok {
 		if rel == "" {
 			return errPerm // 删挂载点 = 删策略,去网页设置里做
 		}
+		log.Printf("[删除] WebDAV 删除外部存储 %s", strings.Trim(path.Clean("/"+name), "/"))
 		return m.Delete(ctx, rel)
 	}
 	if isMountName(name) {
 		return os.ErrNotExist
 	}
+	log.Printf("[删除] WebDAV 删除 %s", strings.Trim(path.Clean("/"+name), "/"))
 	return d.local.RemoveAll(ctx, name)
 }
 

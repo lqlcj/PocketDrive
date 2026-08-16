@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,6 +61,10 @@ func expectedChunkSize(us *db.UploadSession, index int) (int64, bool) {
 
 // 本机会话 32 位十六进制;外部存储会话多一个 s3 前缀
 var reUploadID = regexp.MustCompile(`^(s3)?[0-9a-f]{32}$`)
+
+// 本机会话的暂存目录名(外部存储会话不在本地落盘,没有目录)。
+// 自动清理只认这个形状,见 StartCleanup。
+var reLocalSessionDir = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // 已传完的分片文件名(半块是 part_00001.partial,不匹配)
 var rePart = regexp.MustCompile(`^part_(\d{5})$`)
@@ -165,33 +170,51 @@ func (s *Service) dropSession(ctx context.Context, us *db.UploadSession) {
 }
 
 // StartCleanup 定时清理超时未完成的上传会话。
+//
+// 这是全服务唯一一个「定时删东西」的地方,所以下手范围必须收得很死:
+// 只删自己建的、名字就是会话 ID 的目录。tmpDir 万一和用户看得见的目录
+// 重合(比如把 POCKETDRIVE_DB 指进了网盘),漫无边界地删「没有会话记录
+// 的条目」就等于把用户自己建的文件夹隔天清掉——那正是「东西莫名其妙
+// 消失」的来源。
 func (s *Service) StartCleanup() {
 	go func() {
 		for {
-			var stale []db.UploadSession
-			s.db.Where("created_at < ?", time.Now().Add(-tmpTTL)).Find(&stale)
-			for i := range stale {
-				ctx, cancel := contextTimeout()
-				s.dropSession(ctx, &stale[i])
-				cancel()
-			}
-			// 没有会话记录的孤儿暂存目录(如断电导致记录丢失)一并清掉
-			if entries, err := os.ReadDir(s.tmpDir); err == nil {
-				for _, e := range entries {
-					info, err := e.Info()
-					if err != nil || time.Since(info.ModTime()) <= tmpTTL {
-						continue
-					}
-					var cnt int64
-					s.db.Model(&db.UploadSession{}).Where("id = ?", e.Name()).Count(&cnt)
-					if cnt == 0 {
-						_ = os.RemoveAll(filepath.Join(s.tmpDir, e.Name()))
-					}
-				}
-			}
+			s.cleanupOnce()
 			time.Sleep(time.Hour)
 		}
 	}()
+}
+
+func (s *Service) cleanupOnce() {
+	var stale []db.UploadSession
+	s.db.Where("created_at < ?", time.Now().Add(-tmpTTL)).Find(&stale)
+	for i := range stale {
+		ctx, cancel := contextTimeout()
+		log.Printf("[清理] 超时的上传会话 %s(目标 %s)", stale[i].ID, stale[i].Path)
+		s.dropSession(ctx, &stale[i])
+		cancel()
+	}
+	// 没有会话记录的孤儿暂存目录(如断电导致记录丢失)一并清掉
+	entries, err := os.ReadDir(s.tmpDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		// 不是自己建的暂存目录一律不碰
+		if !e.IsDir() || !reLocalSessionDir.MatchString(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) <= tmpTTL {
+			continue
+		}
+		var cnt int64
+		s.db.Model(&db.UploadSession{}).Where("id = ?", e.Name()).Count(&cnt)
+		if cnt == 0 {
+			log.Printf("[清理] 无主的上传暂存目录 %s", e.Name())
+			_ = os.RemoveAll(filepath.Join(s.tmpDir, e.Name()))
+		}
+	}
 }
 
 func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"log"
 	"net/http"
 	"path"
 	"strings"
@@ -58,6 +59,8 @@ func (s *Service) purgeExpired() {
 	var items []db.TrashItem
 	s.db.Where("deleted_at < ?", time.Now().Add(-retention)).Find(&items)
 	for i := range items {
+		log.Printf("[删除] 回收站里超过 %d 天的 %s(%s 删除)", int(retention/(24*time.Hour)),
+			items[i].OrigPath, items[i].DeletedAt.Format(time.DateOnly))
 		_ = s.permDelete(&items[i])
 	}
 }
@@ -100,6 +103,7 @@ func (s *Service) Trash(p string) error {
 		_ = s.files.Root().Rename(path.Join(trashDir, key), p)
 		return err
 	}
+	log.Printf("[删除] %s → 回收站(%s)", p, key)
 	return nil
 }
 
@@ -164,6 +168,7 @@ func (s *Service) permDelete(item *db.TrashItem) error {
 	if err := s.files.Root().RemoveAll(path.Join(trashDir, item.TrashKey)); err != nil {
 		return err
 	}
+	log.Printf("[删除] 永久删除 %s(原位置 %s)", item.TrashKey, item.OrigPath)
 	if err := s.db.Delete(&db.TrashItem{}, item.ID).Error; err != nil {
 		return err
 	}
@@ -200,6 +205,7 @@ func (s *Service) HandleDeleteToTrash(w http.ResponseWriter, r *http.Request) {
 				httpx.Err(w, http.StatusBadGateway, err.Error())
 				return
 			}
+			log.Printf("[删除] 外部存储 %s(不进回收站)", p)
 			continue
 		}
 		if err := s.Trash(p); err != nil {

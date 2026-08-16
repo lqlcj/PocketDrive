@@ -3,6 +3,7 @@ package aria2
 import (
 	"encoding/base64"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -187,6 +188,7 @@ func (m *Manager) syncOne(t *db.DownloadTask) {
 	t.ErrorMsg = friendlyErr(st.ErrorMessage)
 	// 同一个任务每 2 秒同步一次,只在报错第一次出现时记,别刷屏
 	if t.ErrorMsg != "" && t.ErrorMsg != prevErr {
+		log.Printf("[下载] 任务 %s(%s)报错: %s", t.GID, t.Name, t.ErrorMsg)
 	}
 	if name := statusName(st); name != "" {
 		t.Name = name
