@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"os"
 	"path"
 	"strings"
@@ -166,6 +167,37 @@ func (i entryInfo) ModTime() time.Time {
 }
 func (i entryInfo) IsDir() bool      { return i.e.Dir }
 func (i entryInfo) Sys() interface{} { return nil }
+
+// ContentType 实现 webdav.ContentTyper。不实现的话,PROPFIND 会为列表
+// 里的每个文件再 OpenFile 一次去嗅探前 512 字节——在外部存储上那等于
+// 每个文件一次 GetObject,一个上千首歌的文件夹能把手机客户端拖到超时。
+// 按扩展名给类型即可,拿不准就 octet-stream,播放器本来也看扩展名。
+func (i entryInfo) ContentType(context.Context) (string, error) {
+	if i.e.Dir {
+		return "httpd/unix-directory", nil
+	}
+	if ct := mime.TypeByExtension(path.Ext(i.e.Name)); ct != "" {
+		return ct, nil
+	}
+	if ct, ok := extraTypes[strings.ToLower(path.Ext(i.e.Name))]; ok {
+		return ct, nil
+	}
+	return "application/octet-stream", nil
+}
+
+// extraTypes 补齐 Go 内置表里没有、精简容器又没有 /etc/mime.types 的
+// 常见媒体类型(mime.TypeByExtension 在 scratch 镜像里只认十几种)。
+var extraTypes = map[string]string{
+	".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
+	".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/opus",
+	".wav": "audio/wav", ".wma": "audio/x-ms-wma", ".ape": "audio/x-ape",
+	".m4b": "audio/mp4", ".aiff": "audio/aiff", ".dsf": "audio/x-dsf",
+	".mp4": "video/mp4", ".mkv": "video/x-matroska", ".webm": "video/webm",
+	".mov": "video/quicktime", ".avi": "video/x-msvideo", ".ts": "video/mp2t",
+	".flv": "video/x-flv", ".m4v": "video/x-m4v",
+	".lrc": "text/plain", ".cue": "text/plain", ".m3u": "audio/x-mpegurl",
+	".m3u8": "application/vnd.apple.mpegurl",
+}
 
 // ---- 根目录包装:追加挂载点 ----
 

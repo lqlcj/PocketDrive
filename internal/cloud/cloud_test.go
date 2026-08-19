@@ -1,6 +1,11 @@
 package cloud
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"golang.org/x/net/webdav"
+)
 
 // Region 曾经被无条件填成 "auto",导致 MinIO/AWS 签名校验失败
 // ("the region is wrong")。只有 R2 需要 auto,其余留空让 SDK 自己探测。
@@ -102,4 +107,22 @@ func TestNormalizeValidation(t *testing.T) {
 			t.Errorf("中文挂载名应当合法: %v", err)
 		}
 	})
+}
+
+// entryInfo 必须实现 webdav.ContentTyper,否则 PROPFIND 会为列表里的
+// 每个文件回源 GetObject 嗅探类型,大文件夹会卡死手机客户端。
+func TestEntryInfoContentType(t *testing.T) {
+	var _ webdav.ContentTyper = entryInfo{}
+	for _, c := range []struct{ name, want string }{
+		{"a.mp3", "audio/mpeg"},
+		{"a.bin", "application/octet-stream"},
+	} {
+		got, err := entryInfo{Entry{Name: c.name}}.ContentType(context.Background())
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+	if got, _ := (entryInfo{Entry{Name: "d", Dir: true}}).ContentType(context.Background()); got != "httpd/unix-directory" {
+		t.Errorf("dir: got %q", got)
+	}
 }
