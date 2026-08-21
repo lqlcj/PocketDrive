@@ -43,12 +43,35 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		files.SetDownloadHeaders(w, path.Base(r.URL.Path), false, false)
 	}
+	if r.Method == methodPropfind {
+		r = preparePropfind(r)
+	}
 	// 只重定向 GET。HEAD 照旧本地应答:它不传 body,中转不花流量,而
 	// 客户端常拿 HEAD 探大小/类型——留在本地对不跟随重定向的客户端更友好。
 	if r.Method == http.MethodGet && h.redirectToBucket(w, r) {
 		return
 	}
 	h.dav.ServeHTTP(w, r)
+}
+
+const methodPropfind = "PROPFIND"
+
+// preparePropfind 处理列目录请求的两件事,都是为了让上千个文件的文件夹
+// 在手机上还能打开。
+//
+//  1. 不带 Depth 的 PROPFIND,RFC 4918 说按 infinity 处理,x/net/webdav
+//     照做——对着挂载点就是把整个桶递归列一遍。真按这个来,稍大的存储
+//     都会让客户端等到超时。RFC 4918 §9.1 本来就允许服务端拒绝
+//     infinity;比起回 403,直接按文件浏览器真正想要的 Depth: 1 应答,
+//     对客户端更友好。显式写了 Depth 的请求不动。
+//  2. 挂上目录列表缓存,把遍历期间成百上千次回源 Stat 压成零次
+//     (internal/cloud/davcache.go)。PROPFIND 是只读的,请求内缓存不会
+//     让客户端读到自己刚写的旧值。
+func preparePropfind(r *http.Request) *http.Request {
+	if r.Header.Get("Depth") == "" {
+		r.Header.Set("Depth", "1")
+	}
+	return r.WithContext(cloud.WithListCache(r.Context()))
 }
 
 // redirectToBucket 把外部存储里的文件读取 302 到预签名 URL,字节不过

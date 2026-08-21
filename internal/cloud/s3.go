@@ -81,6 +81,26 @@ func (m *S3Mount) Ping(ctx context.Context) error {
 	return nil
 }
 
+// listObjects 包一层 minio 的 ListObjects,返回条目 channel 和一个必须
+// defer 掉的 stop。
+//
+// minio 的生产 goroutine 只有在 channel 被读干净之后才退出;中途 break
+// 或 return 就把它永久卡在发送上(api-list.go 的注释原话:"caller must
+// drain the channel entirely … without waiting on the channel to be
+// closed completely you might leak goroutines")。光取消 ctx 也不够——
+// channel 缓冲只有 1,取消后那条 err 可能还是塞不进去。所以 stop 里先
+// 取消再读空:取消让它尽快收手,读空让它把最后一条发出来然后关闭。
+func (m *S3Mount) listObjects(ctx context.Context, opts minio.ListObjectsOptions) (<-chan minio.ObjectInfo, func()) {
+	lctx, cancel := context.WithCancel(ctx)
+	ch := m.client.ListObjects(lctx, m.bucket, opts)
+	return ch, func() {
+		cancel()
+		// 读空,让卡在发送上的生产者走完并关掉 channel
+		for range ch {
+		}
+	}
+}
+
 // List 列出目录(delimiter 模式):公共前缀 → 文件夹,对象 → 文件。
 func (m *S3Mount) List(ctx context.Context, rel string) ([]Entry, error) {
 	prefix := m.key(rel)
@@ -88,9 +108,9 @@ func (m *S3Mount) List(ctx context.Context, rel string) ([]Entry, error) {
 		prefix += "/"
 	}
 	var out []Entry
-	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{
-		Prefix: prefix,
-	}) {
+	ch, stop := m.listObjects(ctx, minio.ListObjectsOptions{Prefix: prefix})
+	defer stop()
+	for obj := range ch {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
@@ -134,9 +154,9 @@ func (m *S3Mount) Stat(ctx context.Context, rel string) (Entry, error) {
 	}
 	// 不是对象:看是否是"目录"
 	prefix := m.key(rel) + "/"
-	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{
-		Prefix: prefix, MaxKeys: 1,
-	}) {
+	ch, stop := m.listObjects(ctx, minio.ListObjectsOptions{Prefix: prefix, MaxKeys: 1})
+	defer stop()
+	for obj := range ch {
 		if obj.Err == nil {
 			return Entry{Name: path.Base(rel), Dir: true}, nil
 		}
@@ -189,9 +209,9 @@ func (m *S3Mount) listAll(ctx context.Context, rel string) ([]string, error) {
 			keys = append(keys, cand)
 		}
 	}
-	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{
-		Prefix: k + "/", Recursive: true,
-	}) {
+	ch, stop := m.listObjects(ctx, minio.ListObjectsOptions{Prefix: k + "/", Recursive: true})
+	defer stop()
+	for obj := range ch {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
@@ -209,9 +229,9 @@ func (m *S3Mount) WalkFiles(ctx context.Context, rel string,
 	if prefix != "" {
 		prefix += "/"
 	}
-	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{
-		Prefix: prefix, Recursive: true,
-	}) {
+	ch, stop := m.listObjects(ctx, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
+	defer stop()
+	for obj := range ch {
 		if obj.Err != nil {
 			return obj.Err
 		}

@@ -99,9 +99,24 @@ func (d *DavFS) Rename(ctx context.Context, oldName, newName string) error {
 	return d.local.Rename(ctx, oldName, newName)
 }
 
+// stat 查外部存储上的一条路径,能命中请求内缓存就一个网络请求都不发
+// (davcache.go 讲了为什么非缓存不可)。
+func (d *DavFS) stat(ctx context.Context, m *S3Mount, rel string) (Entry, error) {
+	c := listCacheFrom(ctx)
+	if e, ok := c.get(m.Name, rel); ok {
+		return e, nil
+	}
+	e, err := m.Stat(ctx, rel)
+	if err != nil {
+		return Entry{}, err
+	}
+	c.put(m.Name, rel, e)
+	return e, nil
+}
+
 func (d *DavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 	if m, rel, ok := d.split(name); ok {
-		e, err := m.Stat(ctx, rel)
+		e, err := d.stat(ctx, m, rel)
 		if err != nil {
 			return nil, os.ErrNotExist
 		}
@@ -113,25 +128,46 @@ func (d *DavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 	return d.local.Stat(ctx, name)
 }
 
+// isWriteOpen 判断一次 OpenFile 是不是真的要写内容。
+//
+// 不能只看"带了 O_RDWR 就是写"。x/net/webdav 处理 PROPPATCH 时,patch()
+// 就是拿光秃秃的 os.O_RDWR 打开资源的(prop.go),只为看看这个 File 实现
+// 没实现 DeadPropsHolder,一个字节都不会写。而 s3WriteFile 一构造就挂着
+// 一个等 body 的 PutObject,Close 时把已经收到的部分提交上去——照字面
+// 意思把 O_RDWR 当成写,客户端每发一次 PROPPATCH,桶里那个对象就被覆盖
+// 成 0 字节,而且客户端收到的还是正常的 207。davfs2、Cyberduck、Windows
+// 资源管理器挂载后都会设自定义属性,等于文件放上去就没。
+//
+// 真要写内容的调用方都带 O_TRUNC 或 O_CREATE:PUT、COPY 的目标、LOCK 给
+// 不存在的资源建空占位,三处都是 O_RDWR|O_CREATE|O_TRUNC。单独的 O_WRONLY
+// 除了写没有别的用途,也算。剩下的一律当读打开——反正 s3ReadFile 的 Write
+// 会拒绝,真有人想写也是干净地报错,不会闷声把文件清掉。
+func isWriteOpen(flag int) bool {
+	return flag&(os.O_WRONLY|os.O_CREATE|os.O_TRUNC) != 0
+}
+
 func (d *DavFS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
 	if m, rel, ok := d.split(name); ok {
-		// 写入(PUT)
-		if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE) != 0 {
+		// 写入(PUT / COPY 的目标 / LOCK 建空占位)
+		if isWriteOpen(flag) {
 			if rel == "" {
 				return nil, errPerm
 			}
 			return newS3WriteFile(ctx, m, rel), nil
 		}
-		// 目录?
-		if e, err := m.Stat(ctx, rel); err == nil && e.Dir {
-			return &s3DirFile{ctx: ctx, m: m, rel: rel, info: entryInfo{e}}, nil
-		}
-		// 文件读取
-		obj, e, err := m.Open(ctx, rel)
+		// 读:目录和文件都只取元信息就够开工。x/net/webdav 的 props 会
+		// 对列表里的每一个资源 OpenFile + Stat + Close 一遍,纯粹为了拿
+		// FileInfo(prop.go 的 props);在外部存储上"打开"是要花一次往返
+		// 的,真按字面意思去开对象,一千首歌的文件夹又是一千次 HEAD。
+		// 所以这里一个字节都不预读,内容留到真的 Read 时再取。
+		e, err := d.stat(ctx, m, rel)
 		if err != nil {
 			return nil, os.ErrNotExist
 		}
-		return &s3ReadFile{obj: obj, info: entryInfo{e}}, nil
+		if e.Dir {
+			return &s3DirFile{ctx: ctx, m: m, rel: rel, info: entryInfo{e}}, nil
+		}
+		return &s3ReadFile{ctx: ctx, m: m, rel: rel, info: entryInfo{e}}, nil
 	}
 	if isMountName(name) {
 		return nil, os.ErrNotExist
@@ -261,6 +297,9 @@ func (f *s3DirFile) Readdir(count int) ([]fs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	// walkFS 马上就要把这批结果丢掉、再逐个 Stat 回来。先整份存进请求
+	// 缓存,那批 Stat 就全在内存里解决了(davcache.go)。
+	listCacheFrom(f.ctx).putDir(f.m.Name, f.rel, entries)
 	out := make([]fs.FileInfo, len(entries))
 	for i, e := range entries {
 		out[i] = entryInfo{e}
@@ -268,17 +307,80 @@ func (f *s3DirFile) Readdir(count int) ([]fs.FileInfo, error) {
 	return out, nil
 }
 
-// ---- S3 读文件(*minio.Object 本身就是 ReadSeekCloser,Range 走
-// 底层按需重新发起带偏移的 GET,不会整文件下载) ----
-
+// ---- S3 读文件:惰性打开 ----
+//
+// 构造时不碰网络:PROPFIND 会为列表里每个文件走一遍 OpenFile/Stat/Close
+// 却一个字节都不读(见 DavFS.OpenFile 的注释),那种情况下这里始终是零
+// 请求。真读内容时才开对象,*minio.Object 本身是 ReadSeekCloser,Range
+// 由它按偏移重新发起 GET,不会整文件下载。
+//
+// Seek 在开对象之前纯算术:http.ServeContent 上来就 Seek 到末尾探大小、
+// 再 Seek 回开头,大小从 info 里就能给,不必为此多跑一趟。HEAD 请求因此
+// 一次回源都没有。
 type s3ReadFile struct {
-	obj  io.ReadSeekCloser
+	ctx  context.Context
+	m    *S3Mount
+	rel  string
 	info os.FileInfo
+	obj  io.ReadSeekCloser // nil = 还没开
+	off  int64             // 开之前 Seek 到的位置
 }
 
-func (f *s3ReadFile) Close() error                       { return f.obj.Close() }
-func (f *s3ReadFile) Read(p []byte) (int, error)         { return f.obj.Read(p) }
-func (f *s3ReadFile) Seek(o int64, w int) (int64, error) { return f.obj.Seek(o, w) }
+func (f *s3ReadFile) open() (io.ReadSeekCloser, error) {
+	if f.obj != nil {
+		return f.obj, nil
+	}
+	obj, _, err := f.m.Open(f.ctx, f.rel)
+	if err != nil {
+		return nil, err
+	}
+	if f.off != 0 {
+		if _, err := obj.Seek(f.off, io.SeekStart); err != nil {
+			obj.Close()
+			return nil, err
+		}
+	}
+	f.obj = obj
+	return obj, nil
+}
+
+func (f *s3ReadFile) Read(p []byte) (int, error) {
+	obj, err := f.open()
+	if err != nil {
+		return 0, err
+	}
+	return obj.Read(p)
+}
+
+func (f *s3ReadFile) Seek(off int64, whence int) (int64, error) {
+	if f.obj != nil {
+		return f.obj.Seek(off, whence)
+	}
+	var abs int64
+	switch whence {
+	case io.SeekStart:
+		abs = off
+	case io.SeekCurrent:
+		abs = f.off + off
+	case io.SeekEnd:
+		abs = f.info.Size() + off
+	default:
+		return 0, errors.New("webdav: 无效的 whence")
+	}
+	if abs < 0 {
+		return 0, errors.New("webdav: 负的文件偏移")
+	}
+	f.off = abs
+	return abs, nil
+}
+
+func (f *s3ReadFile) Close() error {
+	if f.obj == nil {
+		return nil
+	}
+	return f.obj.Close()
+}
+
 func (f *s3ReadFile) Write([]byte) (int, error)          { return 0, errPerm }
 func (f *s3ReadFile) Readdir(int) ([]fs.FileInfo, error) { return nil, errPerm }
 func (f *s3ReadFile) Stat() (os.FileInfo, error)         { return f.info, nil }
