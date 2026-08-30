@@ -8,23 +8,50 @@ import UploadPanel from './components/UploadPanel';
 import MusicPlayer from './components/MusicPlayer';
 import { UploadProvider } from './upload/store';
 import { PlayerProvider } from './player/store';
+import { cn } from './lib/utils';
+import {
+    importDownloads,
+    importDownloadSettings,
+    importFiles,
+    importLogin,
+    importNoteEditor,
+    importSettings,
+    importSharePage,
+    importShares,
+    importStorage,
+    importTrash,
+} from './routes';
 
-const Login = lazy(() => import('./pages/Login'));
-const Files = lazy(() => import('./pages/Files'));
-const NoteEditor = lazy(() => import('./pages/NoteEditor'));
-const Downloads = lazy(() => import('./pages/Downloads'));
-const DownloadSettings = lazy(() => import('./pages/DownloadSettings'));
-const SharesPage = lazy(() => import('./pages/SharesPage'));
-const Trash = lazy(() => import('./pages/Trash'));
-const Settings = lazy(() => import('./pages/Settings'));
-const StoragePage = lazy(() => import('./pages/StoragePage'));
-const SharePage = lazy(() => import('./pages/SharePage'));
+// importer 都放在 routes.ts,侧栏悬停预取和这里的 lazy() 共用同一个
+const Login = lazy(importLogin);
+const Files = lazy(importFiles);
+const NoteEditor = lazy(importNoteEditor);
+const Downloads = lazy(importDownloads);
+const DownloadSettings = lazy(importDownloadSettings);
+const SharesPage = lazy(importShares);
+const Trash = lazy(importTrash);
+const Settings = lazy(importSettings);
+const StoragePage = lazy(importStorage);
+const SharePage = lazy(importSharePage);
 
-function SuspenseWrap({ children }: { children: React.ReactNode }) {
+/**
+ * 懒加载兜底。
+ *
+ * 版心里的兜底(full=false)高度必须比主区矮:主区本来就被 min-h-screen
+ * 撑到一屏,再塞个一屏高的转圈进去,页面总高就超过视口、逼出滚动条,
+ * chunk 一到内容塌回去滚动条又撤掉——换一次页白抖两下。
+ * 整页路由(登录页、分享页)不在版心里,占满一屏才不显得吊在半空。
+ */
+function SuspenseWrap({ children, full = false }: { children: React.ReactNode; full?: boolean }) {
     return (
         <Suspense
             fallback={
-                <div className="min-h-screen flex items-center justify-center gap-2 text-ink-soft">
+                <div
+                    className={cn(
+                        'flex items-center justify-center gap-2 text-ink-soft',
+                        full ? 'min-h-screen' : 'min-h-[50vh]',
+                    )}
+                >
                     <Loader2 className="size-5 animate-spin" /> 加载中…
                 </div>
             }
@@ -51,7 +78,13 @@ function Private({
         );
     }
     if (profile === null) {
-        return <Login onLogin={onProfile} />;
+        // 登录页是懒加载的,得有自己的 Suspense 边界:它在 Layout 外面,
+        // 上面再没有别的边界能接住它挂起
+        return (
+            <SuspenseWrap full>
+                <Login onLogin={onProfile} />
+            </SuspenseWrap>
+        );
     }
     return (
         <UploadProvider>
@@ -112,7 +145,7 @@ export default function App() {
         <BrowserRouter>
             <Routes>
                 {/* 公开分享页:免登录 */}
-                <Route path="/s/:token" element={<SuspenseWrap><SharePage /></SuspenseWrap>} />
+                <Route path="/s/:token" element={<SuspenseWrap full><SharePage /></SuspenseWrap>} />
                 <Route
                     path="*"
                     element={

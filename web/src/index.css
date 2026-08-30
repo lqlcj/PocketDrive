@@ -52,6 +52,10 @@ html {
     color-scheme: light;
     /* iOS Safari 100vh fix */
     height: calc(var(--vh, 1vh) * 100);
+    /* 永远给滚动条留出那条槽。否则换页时页面高度一变(长列表 → 短页面),
+       浏览器就撤掉滚动条,版心 max-w-5xl mx-auto 跟着重新居中,整页横跳
+       十几个像素——点导航时"左右两边都抖一下"就是这么来的 */
+    scrollbar-gutter: stable;
 }
 
 * {

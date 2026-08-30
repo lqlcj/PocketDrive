@@ -26,36 +26,59 @@ import ErrorBoundary from './ErrorBoundary';
 import { applyTheme, getTheme } from '../theme';
 import type { Theme } from '../theme';
 import { cn } from '../lib/utils';
+import {
+    importDownloads,
+    importFiles,
+    importSettings,
+    importShares,
+    importStorage,
+    importTrash,
+    prefetch,
+} from '../routes';
 
-const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }> = [
-    { to: '/files', label: '我的文件', icon: FolderOpen },
-    { to: '/downloads', label: '离线下载', icon: CloudDownload, end: true },
-    { to: '/shares', label: '分享管理', icon: Link2 },
-    { to: '/trash', label: '垃圾桶', icon: Trash2 },
-    { to: '/storage', label: '储存策略', icon: HardDrive, end: true },
-    { to: '/settings', label: '设置', icon: Settings },
+const NAV: Array<{
+    to: string;
+    label: string;
+    icon: LucideIcon;
+    end?: boolean;
+    /** 悬停就把这个路由的 chunk 拉下来,点下去不用等(见 routes.ts) */
+    load: () => Promise<unknown>;
+}> = [
+    { to: '/files', label: '我的文件', icon: FolderOpen, load: importFiles },
+    { to: '/downloads', label: '离线下载', icon: CloudDownload, end: true, load: importDownloads },
+    { to: '/shares', label: '分享管理', icon: Link2, load: importShares },
+    { to: '/trash', label: '垃圾桶', icon: Trash2, load: importTrash },
+    { to: '/storage', label: '储存策略', icon: HardDrive, end: true, load: importStorage },
+    { to: '/settings', label: '设置', icon: Settings, load: importSettings },
 ];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
     return (
         <nav className="flex flex-col gap-0.5">
-            {NAV.map((n) => (
-                <NavLink
-                    key={n.to}
-                    to={n.to}
-                    end={n.end}
-                    onClick={onNavigate}
-                    className={({ isActive }) =>
-                        cn(
-                            'flex items-center gap-2.5 px-3.5 py-2 rounded-full font-bold text-sm transition-colors',
-                            isActive ? 'bg-leaf text-white' : 'text-ink hover:bg-paper-2',
-                        )
-                    }
-                >
-                    <n.icon className="size-4" />
-                    {n.label}
-                </NavLink>
-            ))}
+            {NAV.map((n) => {
+                // 鼠标移上来 / 键盘 Tab 到就开始下载;触屏没有悬停,
+                // pointerenter 在 tap 的按下阶段也会触发,一样能抢出一点时间
+                const pre = prefetch(n.load);
+                return (
+                    <NavLink
+                        key={n.to}
+                        to={n.to}
+                        end={n.end}
+                        onClick={onNavigate}
+                        onPointerEnter={pre}
+                        onFocus={pre}
+                        className={({ isActive }) =>
+                            cn(
+                                'flex items-center gap-2.5 px-3.5 py-2 rounded-full font-bold text-sm transition-colors',
+                                isActive ? 'bg-leaf text-white' : 'text-ink hover:bg-paper-2',
+                            )
+                        }
+                    >
+                        <n.icon className="size-4" />
+                        {n.label}
+                    </NavLink>
+                );
+            })}
         </nav>
     );
 }
