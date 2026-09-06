@@ -23,6 +23,14 @@ export default defineConfig({
                     if (id.includes('node_modules/react-router')) return 'vendor-router';
                     if (id.includes('node_modules/lucide-react')) return 'vendor-icons';
                     if (id.includes('node_modules/react-markdown') || id.includes('node_modules/remark-gfm')) return 'vendor-markdown';
+                    if (
+                        id.includes('node_modules/@mdxeditor') ||
+                        id.includes('node_modules/@lexical') ||
+                        id.includes('node_modules/lexical') ||
+                        id.includes('node_modules/@codemirror') ||
+                        id.includes('node_modules/codemirror') ||
+                        id.includes('node_modules/cm6-theme')
+                    ) return 'vendor-mdxeditor';
                     if (id.includes('node_modules/@radix-ui')) return 'vendor-radix';
                     if (id.includes('node_modules/react-dom') || id.includes('node_modules/react')) return 'vendor-react';
                     if (id.includes('node_modules/@fontsource')) return 'vendor-fonts';

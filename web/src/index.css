@@ -58,6 +58,15 @@ html {
     scrollbar-gutter: stable;
 }
 
+/* Radix 菜单、选择器和弹窗会通过 react-remove-scroll 给 body 补偿滚动条宽度。
+   stable 已经保留这份空间，重复的右边距会让页面左移；旧浏览器仍沿用组件的补偿。
+   加上 html 提高优先级，覆盖组件随后注入的 !important 样式。 */
+@supports (scrollbar-gutter: stable) {
+    html body[data-scroll-locked] {
+        margin-right: 0 !important;
+    }
+}
+
 * {
     -webkit-overflow-scrolling: touch;
 }

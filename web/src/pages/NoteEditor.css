@@ -1,0 +1,277 @@
+/* 编辑器和其独立挂载的菜单共用站点配色，正文排版只作用于可编辑内容。 */
+:is(.mdxeditor, .mdxeditor-popup-container).pd-note-editor {
+    --font-body: var(--font-sans);
+    --basePageBg: var(--paper);
+    --baseBase: var(--paper);
+    --baseBgSubtle: var(--paper);
+    --baseBg: var(--paper-2);
+    --baseBgHover: var(--paper-2);
+    --baseBgActive: var(--paper-2);
+    --baseLine: var(--line);
+    --baseBorder: var(--line);
+    --baseBorderHover: var(--ink-soft);
+    --baseText: var(--ink-soft);
+    --baseTextContrast: var(--ink);
+    --accentBg: var(--leaf-soft);
+    --accentBgHover: var(--leaf-soft);
+    --accentBgActive: var(--leaf-soft);
+    --accentBorder: var(--leaf);
+    --accentSolid: var(--leaf);
+    --accentSolidHover: var(--leaf-dark);
+    --accentText: var(--leaf-dark);
+    --accentTextContrast: var(--leaf-dark);
+}
+
+.mdxeditor.pd-note-editor {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    background: var(--paper);
+}
+
+.pd-note-editor .mdxeditor-toolbar {
+    padding: 0.5rem 0.75rem;
+    border-radius: 0;
+    background: var(--paper);
+}
+
+.pd-note-editor .mdxeditor-root-contenteditable {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+}
+
+.pd-note-editor .pd-note-content {
+    min-width: 0;
+    max-width: 52rem;
+    margin-inline: auto;
+    padding: 2.25rem clamp(1.25rem, 4vw, 3rem) 4rem;
+    color: var(--ink);
+    font-family: 'Noto Sans SC', system-ui, sans-serif;
+    font-size: 1rem;
+    font-weight: 400;
+    line-height: 1.85;
+    overflow-wrap: anywhere;
+}
+
+/* placeholder 也接收 contentEditableClassName，保持与空文档的光标对齐。 */
+.pd-note-editor .pd-note-content:not([contenteditable]) {
+    inset-inline: 0;
+    color: var(--ink-soft);
+}
+
+.pd-note-content :where(h1, h2, h3, h4, h5, h6) {
+    margin-block: 1.6em 0.55em;
+    color: var(--ink);
+    font-weight: 700;
+    line-height: 1.4;
+    letter-spacing: -0.015em;
+}
+
+.pd-note-content h1 {
+    font-size: clamp(1.75rem, 2.5vw, 2rem);
+}
+
+.pd-note-content h2 {
+    padding-bottom: 0.35em;
+    border-bottom: 1px solid var(--line);
+    font-size: clamp(1.375rem, 2vw, 1.5rem);
+}
+
+.pd-note-content h3 {
+    font-size: 1.25rem;
+}
+
+.pd-note-content h4 {
+    font-size: 1.125rem;
+}
+
+.pd-note-content h5 {
+    font-size: 1rem;
+}
+
+.pd-note-content h6 {
+    color: var(--ink-soft);
+    font-size: 0.9375rem;
+}
+
+.pd-note-content p {
+    margin-block: 0.85em;
+    text-wrap: pretty;
+}
+
+.pd-note-content > :first-child {
+    margin-top: 0;
+}
+
+.pd-note-content > :last-child {
+    margin-bottom: 0;
+}
+
+.pd-note-content :where(ul, ol) {
+    margin-block: 0.85em;
+    padding-inline-start: 1.65em;
+}
+
+.pd-note-content ul {
+    list-style-type: disc;
+}
+
+.pd-note-content ol {
+    list-style-type: decimal;
+}
+
+.pd-note-content ul ul {
+    list-style-type: circle;
+}
+
+.pd-note-content ul ul ul {
+    list-style-type: square;
+}
+
+.pd-note-content li {
+    margin-block: 0.3em;
+}
+
+.pd-note-content li::marker {
+    color: var(--ink-soft);
+}
+
+.pd-note-content li > :where(ul, ol) {
+    margin-block: 0.3em;
+}
+
+/* 保留 Lexical 的任务框和嵌套列表结构，只调整任务框与新行高的对齐。 */
+.pd-note-content li[role='checkbox'] {
+    margin-inline-start: 0;
+    padding-inline: 1.65em 0;
+}
+
+.pd-note-content li[role='checkbox']::before {
+    top: calc((1.85em - 1rem) / 2);
+}
+
+.pd-note-content li[role='checkbox']::after {
+    top: calc((1.85em - 1rem) / 2 + 0.125rem);
+}
+
+.pd-note-content li[aria-checked='true'] {
+    color: var(--ink-soft);
+}
+
+.pd-note-content blockquote {
+    margin: 1.25em 0;
+    padding: 0.65em 1em;
+    border-inline-start: 3px solid var(--leaf);
+    border-radius: 0 6px 6px 0;
+    background: color-mix(in srgb, var(--leaf-soft) 35%, var(--paper));
+    color: var(--ink-soft);
+}
+
+.pd-note-content blockquote > :first-child {
+    margin-top: 0;
+}
+
+.pd-note-content blockquote > :last-child {
+    margin-bottom: 0;
+}
+
+.pd-note-content a {
+    color: var(--leaf-dark);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+.pd-note-content code {
+    padding: 0.12em 0.35em;
+    border-radius: 4px;
+    background: var(--paper-2);
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+}
+
+/* 用 CodeMirror 的公开类名识别代码块，避开构建生成的哈希类名。 */
+.pd-note-content [data-lexical-decorator] > div:has(> div > .cm-editor) {
+    margin-block: 1.25em;
+    padding: 2.75rem 0.875rem 0.875rem;
+    border-color: var(--line);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--paper-2) 40%, var(--paper));
+}
+
+.pd-note-editor .cm-editor {
+    background: transparent;
+    color: var(--ink);
+}
+
+.pd-note-editor .cm-scroller {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.65;
+}
+
+.pd-note-editor .cm-gutters {
+    border-right: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+}
+
+.pd-note-editor :is(.cm-activeLine, .cm-activeLineGutter) {
+    background: transparent;
+}
+
+.pd-note-editor .cm-content {
+    caret-color: var(--ink);
+}
+
+.pd-note-editor :is(.cm-cursor, .cm-dropCursor) {
+    border-left-color: var(--ink);
+}
+
+.mdxeditor.pd-note-editor .cm-editor .cm-selectionBackground {
+    background: var(--leaf-soft);
+}
+
+.pd-note-content table {
+    margin-block: 1.25em;
+    font-size: 0.9375rem;
+    line-height: 1.65;
+}
+
+/* 不给表格的增删按钮、行列操作格套用正文单元格样式。 */
+.pd-note-editor .pd-note-content :is(td, th)[data-active] {
+    padding: 0.65em 0.8em;
+    border: 1px solid var(--line);
+}
+
+.pd-note-content th[data-active] {
+    background: var(--paper-2);
+    font-weight: 700;
+}
+
+.pd-note-content :is(td, th)[data-active] p {
+    margin: 0;
+}
+
+.pd-note-content hr {
+    margin-block: 2em;
+    border: 0;
+    border-top: 1px solid var(--line);
+}
+
+.pd-note-content img {
+    max-width: 100%;
+    border-radius: 6px;
+}
+
+@media (max-width: 640px) {
+    .pd-note-editor .pd-note-content {
+        padding: 1.5rem 1.25rem 3rem;
+    }
+
+    .pd-note-editor .mdxeditor-toolbar {
+        padding: 0.5rem;
+    }
+}
