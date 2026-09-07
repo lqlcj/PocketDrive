@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type PhotoSwipe from 'photoswipe';
+import type { PhotoSwipeEventsMap } from 'photoswipe';
 import { Loader2, X } from 'lucide-react';
 import { api, type FileEntry } from '../api';
 import { fileKind } from '../util';
@@ -43,10 +44,12 @@ export default function ImagePreview({ entries, index, dirPath, onNavigate, onCl
             const instance = new PhotoSwipeClass({
                 dataSource: gallery.images,
                 index: gallery.index,
-                bgOpacity: 0.94,
+                bgOpacity: 0.95,
                 loop: false,
                 wheelToZoom: true,
                 showHideAnimationType: 'fade',
+                // The loading overlay is already dark; do not reveal the page again on handoff.
+                showAnimationDuration: 0,
                 closeTitle: '关闭',
                 zoomTitle: '缩放',
                 arrowPrevTitle: '上一张',
@@ -56,15 +59,23 @@ export default function ImagePreview({ entries, index, dirPath, onNavigate, onCl
             });
             viewer = instance;
             const measured = new Set<number>();
-            const measure = (content: { element?: HTMLElement; index: number }) => {
+            const measure = (content: PhotoSwipeEventsMap['loadComplete']['content']) => {
                 const image = content.element;
                 if (!(image instanceof HTMLImageElement) || !image.naturalWidth || measured.has(content.index)) return;
                 measured.add(content.index);
-                // 文件列表没有像素尺寸，图片加载后用实际尺寸更新缩放边界。
-                Object.assign(gallery.images[content.index], { width: image.naturalWidth, height: image.naturalHeight });
-                queueMicrotask(() => {
-                    if (!disposed && instance.isOpen) instance.refreshSlideContent(content.index);
-                });
+                // Update dimensions before paint without replacing the loaded image.
+                const dimensions = { width: image.naturalWidth, height: image.naturalHeight };
+                Object.assign(gallery.images[content.index], dimensions);
+                Object.assign(content, dimensions);
+                if (content.slide) {
+                    const slide = content.slide;
+                    Object.assign(slide, dimensions);
+                    slide.calculateSize();
+                    slide.currentResolution = 0;
+                    slide.zoomAndPanToInitial();
+                    slide.updateContentSize(true);
+                    slide.applyCurrentZoomPan();
+                }
             };
             instance.on('loadComplete', ({ content, isError }) => { if (!isError) measure(content); });
             instance.on('contentActivate', ({ content }) => measure(content));
