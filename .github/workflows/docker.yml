@@ -15,6 +15,7 @@ on:
         paths:
             - 'docker/**'
             - 'scripts/aria2-smoke.mjs'
+            - 'scripts/aria2-smoke.test.mjs'
             - 'scripts/install.sh'
             - '.github/workflows/docker.yml'
     schedule:
@@ -35,6 +36,7 @@ jobs:
             - uses: docker/setup-buildx-action@v3
             - name: Build and test aria2
               run: |
+                  node --test scripts/aria2-smoke.test.mjs
                   docker build --pull -f docker/aria2/Dockerfile -t pocketdrive-aria2:test .
                   node scripts/aria2-smoke.mjs
                   ARIA2_SECRET=ci-validation-only docker compose -f docker/docker-compose.yml config --quiet

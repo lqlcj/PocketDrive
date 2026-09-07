@@ -21,6 +21,11 @@ const server = createServer((req, res) => {
 });
 await new Promise(resolve => server.listen(0, '0.0.0.0', resolve));
 let endpoint;
+function refreshEndpoint() {
+    const port = docker('port', name, '6800/tcp').split(':').at(-1);
+    assert.match(port, /^\d+$/, 'Docker must publish an RPC port');
+    endpoint = `http://127.0.0.1:${port}/jsonrpc`;
+}
 async function rpc(method, params = [], token = secret) {
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -43,8 +48,7 @@ async function until(check) {
 try {
     docker('run', '-d', '--name', name, '--add-host=host.docker.internal:host-gateway',
         '-p', '127.0.0.1::6800', '-e', `RPC_SECRET=${secret}`, image);
-    const port = docker('port', name, '6800/tcp').split(':').at(-1);
-    endpoint = `http://127.0.0.1:${port}/jsonrpc`;
+    refreshEndpoint();
     await until(async () => (await rpc('getVersion')).version);
     await assert.rejects(rpc('getVersion', [], 'incorrect-secret'));
     await rpc('changeGlobalOption', [{ 'max-concurrent-downloads': '2' }]);
@@ -57,6 +61,8 @@ try {
     await until(async () => (await rpc('tellStatus', [gid])).status === 'paused');
     await rpc('saveSession');
     docker('restart', '--time', '60', name);
+    // Docker can reassign an ephemeral host port when the container restarts.
+    refreshEndpoint();
     await until(async () => (await rpc('tellStatus', [gid])).status === 'paused');
     await rpc('changeOption', [gid, { 'max-download-limit': '0' }]);
     await rpc('unpause', [gid]);
