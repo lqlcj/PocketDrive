@@ -9,6 +9,7 @@ import MusicPlayer from './components/MusicPlayer';
 import { UploadProvider } from './upload/store';
 import { PlayerProvider } from './player/store';
 import { cn } from './lib/utils';
+import './lib/historyGuard';
 import {
     importDownloads,
     importDownloadSettings,

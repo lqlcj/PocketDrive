@@ -17,6 +17,7 @@ import VideoPreview from './VideoPreview';
 import EpubPreview from './EpubPreview';
 import { textDraft, textToSave } from '../lib/plaintext';
 import { invalidateList, fetchList } from '../lib/listcache';
+import { useHistoryGuard } from '../lib/historyGuard';
 
 interface Props {
     entries: FileEntry[];
@@ -50,6 +51,8 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose, 
         window.addEventListener('beforeunload', warn);
         return () => window.removeEventListener('beforeunload', warn);
     }, [dirty, saving]);
+
+    useHistoryGuard(dirty || saving, saving);
 
     useEffect(() => {
         let cancelled = false;
@@ -88,7 +91,12 @@ export default function Preview({ entries, index, dirPath, onNavigate, onClose, 
     }, [path, kind, sharedUrl]);
 
     const discard = () => !dirty || window.confirm('修改尚未保存，确定放弃吗？');
-    const close = () => { if (!saving && discard()) onClose(); };
+    const close = () => {
+        if (!saving && discard()) {
+            setEditing(false);
+            onClose();
+        }
+    };
     const saveText = async () => {
         if (saving || text === null || source || !editing) return;
         const content = textToSave(text, draft);

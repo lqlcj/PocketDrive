@@ -291,7 +291,16 @@ export default function Files() {
     const [moveNames, setMoveNames] = useState<string[]>([]);
     const [deleteNames, setDeleteNames] = useState<string[]>([]);
     const [iconTarget, setIconTarget] = useState<FileEntry | null>(null);
-    const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+    const previewName = (location.state as { preview?: string } | null)?.preview;
+    const previewIdx = previewName === undefined ? -1 : entries.findIndex((entry) => !entry.dir && entry.name === previewName);
+    const setPreviewIdx = (idx: number) => {
+        const entry = entries[idx];
+        if (!entry || entry.name === previewName) return;
+        navigate(location.pathname + location.search + location.hash, {
+            replace: previewName !== undefined,
+            state: { ...location.state, preview: entry.name },
+        });
+    };
     const [treeOpen, setTreeOpen] = useState(false);
 
     // 全局搜索点结果跳过来时要高亮的名字:翻到它那一页 + 滚过去 + 闪几下
@@ -1866,13 +1875,13 @@ export default function Files() {
                 </DialogContent>
             </Dialog>
 
-            {previewIdx !== null && entries[previewIdx] && (
+            {previewIdx >= 0 && entries[previewIdx] && (
                 <Preview
                     entries={entries}
                     index={previewIdx}
                     dirPath={path}
                     onNavigate={setPreviewIdx}
-                    onClose={() => setPreviewIdx(null)}
+                    onClose={() => navigate(-1)}
                 />
             )}
 
