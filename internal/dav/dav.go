@@ -21,11 +21,11 @@ import (
 
 const prefix = "/dav"
 
-func Handler(root *os.Root, cloudSvc *cloud.Service) http.Handler {
+func Handler(root *os.Root, cloudSvc *cloud.Service, trash ...func(string) error) http.Handler {
 	return &handler{
 		dav: &webdav.Handler{
 			Prefix:     prefix,
-			FileSystem: cloud.NewDavFSRoot(cloudSvc, root),
+			FileSystem: cloud.NewDavFSRoot(cloudSvc, root, trash...),
 			LockSystem: webdav.NewMemLS(),
 		},
 		cloud: cloudSvc,
@@ -38,6 +38,13 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		r = cloud.TrackDAVUpload(r)
+	}
+	if r.Method == "MOVE" || r.Method == "COPY" {
+		r = r.Clone(r.Context())
+		r.Header.Set("Overwrite", "F")
+	}
 	// WebDAV shares the application origin. Never let an uploaded HTML/SVG/etc.
 	// execute in that origin when fetched with an ordinary browser GET.
 	if r.Method == http.MethodGet {
@@ -103,8 +110,8 @@ func (h *handler) redirectToBucket(w http.ResponseWriter, r *http.Request) bool 
 		return false
 	}
 	u, err := m.PresignGet(r.Context(), rel, path.Base(rel), files.NeedsAttachment(rel))
-	if err != nil {
-		return false // 签名失败就退回中转,别让播放直接断掉
+	if err != nil || u == "" {
+		return false // 签名失败或挂载不支持直连时退回中转
 	}
 	http.Redirect(w, r, u, http.StatusFound)
 	return true

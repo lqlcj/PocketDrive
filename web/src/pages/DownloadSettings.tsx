@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Folder } from 'lucide-react';
+import { ArrowLeft, Folder, Upload, RotateCcw, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { DownloadSettings as DS } from '../api';
+import type { DownloadSettings as DS, DownloadSettingsResponse } from '../api';
 import { Card, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { NativeSelect, Checkbox } from '../components/ui/input';
@@ -33,16 +33,23 @@ export default function DownloadSettings() {
     const [s, setS] = useState<DS | null>(null);
     const [trackerCount, setTrackerCount] = useState(0);
     const [trackerAt, setTrackerAt] = useState('');
+    const [trackerSource, setTrackerSource] = useState<'default' | 'custom'>('default');
+    const trackerInput = useRef<HTMLInputElement>(null);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [updating, setUpdating] = useState(false);
+
+    const applyTrackers = (r: DownloadSettingsResponse) => {
+        setTrackerCount(r.trackerCount);
+        setTrackerAt(r.trackerUpdatedAt);
+        setTrackerSource(r.trackerSource);
+    };
 
     useEffect(() => {
         api.downloadSettings()
             .then((r) => {
                 setS(r.settings);
-                setTrackerCount(r.trackerCount);
-                setTrackerAt(r.trackerUpdatedAt);
+                applyTrackers(r);
             })
             .catch((e) => toast.error(e instanceof Error ? e.message : '加载失败'));
     }, []);
@@ -64,11 +71,44 @@ export default function DownloadSettings() {
         setUpdating(true);
         try {
             const r = await api.updateTrackers();
-            setTrackerCount(r.count);
-            setTrackerAt(new Date().toISOString());
+            applyTrackers(await api.downloadSettings());
             toast.success(`已更新 ${r.count} 条 tracker`);
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '更新失败');
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const importTrackers = async (file?: File) => {
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.txt')) {
+            toast.error('请选择 .txt 文件');
+            return;
+        }
+        if (file.size > 1024 * 1024) {
+            toast.error('Tracker 文件不能超过 1MB');
+            return;
+        }
+        setUpdating(true);
+        try {
+            const r = await api.importTrackers(file);
+            applyTrackers(r);
+            toast.success(`已导入 ${r.trackerCount} 条 Tracker`);
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '导入失败');
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const resetTrackers = async () => {
+        setUpdating(true);
+        try {
+            applyTrackers(await api.resetTrackers());
+            toast.success('已恢复默认 Tracker');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : '恢复失败');
         } finally {
             setUpdating(false);
         }
@@ -162,20 +202,44 @@ export default function DownloadSettings() {
                 {row(
                     'Tracker 列表',
                     <div className="flex items-center gap-3 flex-wrap">
-                        <Checkbox
+                        {trackerSource === 'default' && <Checkbox
                             label="每日自动更新"
                             checked={s.trackerAuto}
                             onChange={(e) => setS({ ...s, trackerAuto: e.target.checked })}
-                        />
-                        <Button size="sm" disabled={updating} onClick={refreshTrackers}>
+                        />}
+                        {trackerSource === 'default' && <Button size="sm" disabled={updating} onClick={refreshTrackers}>
+                            <RefreshCw className="size-3.5" />
                             {updating ? '更新中…' : '立即更新'}
-                        </Button>
-                        <span className="text-xs text-ink-soft">
-                            当前 {trackerCount} 条
+                        </Button>}
+                        <span className="text-xs text-ink-soft break-words">
+                            {trackerSource === 'custom' ? '自定义列表' : '默认列表'} · {trackerCount} 条
                             {trackerAt && ` · ${formatTime(trackerAt)} 更新`}
                         </span>
                     </div>,
-                    '磁力任务自动附带最新 tracker,冷门资源更容易连上',
+                )}
+                {row(
+                    '导入 Tracker',
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <input
+                            ref={trackerInput}
+                            type="file"
+                            accept=".txt,text/plain"
+                            aria-label="Tracker 文本文件"
+                            className="hidden"
+                            disabled={updating}
+                            onChange={(e) => {
+                                const file = e.currentTarget.files?.[0];
+                                e.currentTarget.value = '';
+                                void importTrackers(file);
+                            }}
+                        />
+                        <Button size="sm" disabled={updating} onClick={() => trackerInput.current?.click()}>
+                            <Upload className="size-3.5" /> {updating ? '处理中…' : '导入 .txt'}
+                        </Button>
+                        {trackerSource === 'custom' && <Button size="sm" disabled={updating} onClick={resetTrackers}>
+                            <RotateCcw className="size-3.5" /> 恢复默认
+                        </Button>}
+                    </div>,
                 )}
                 <p className="text-xs text-ink-soft mt-2">
                     DHT / IPv6 等属于 aria2 启动项,由 aria2 侧配置(Docker 版默认已开 DHT)。

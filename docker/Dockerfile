@@ -9,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # 同样固定在构建机架构上:CGO 关着,交叉编译即可,不必让 npm/go 走 QEMU 模拟
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS gobuild
+FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine AS gobuild
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./

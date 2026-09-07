@@ -8,7 +8,7 @@
 
 ## Build, Test, and Development Commands
 
-Use Go 1.26.5+ and Node.js 24 (matching Docker); install ffmpeg for video thumbnails. Run from the repository root:
+Use Go 1.26.8+ and Node.js 24 (matching Docker); install ffmpeg for video thumbnails. Run from the repository root:
 
 - `npm --prefix web ci`: install locked dependencies.
 - `npm --prefix web run build`: type-check and build `web/dist/`. Run this before Go commands because `web/embed.go` embeds these assets.

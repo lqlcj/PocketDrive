@@ -71,7 +71,7 @@ func ctxTimeout() (context.Context, context.CancelFunc) {
 }
 
 // mountStat 解析分享路径是否指向外部存储;是则返回其挂载与文件信息。
-func (s *Service) mountStat(ctx context.Context, p string) (*cloud.S3Mount, string, *cloud.Entry, error) {
+func (s *Service) mountStat(ctx context.Context, p string) (cloud.Mount, string, *cloud.Entry, error) {
 	if !cloud.IsMountPath(p) {
 		return nil, "", nil, nil
 	}
@@ -428,13 +428,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusNotFound, merr.Error())
 			return
 		}
-		u, perr := m.PresignGet(r.Context(), rel, e.Name,
-			r.URL.Query().Get("dl") == "1" || files.NeedsAttachment(e.Name))
-		if perr != nil {
-			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+perr.Error())
-			return
-		}
-		http.Redirect(w, r, u, http.StatusFound)
+		files.ServeMount(w, r, m, rel, e.Name, r.URL.Query().Get("dl") == "1", false)
 		return
 	}
 	f, err := s.files.Root().Open(sh.Path)
@@ -491,12 +485,7 @@ func (s *Service) HandleDirect(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusNotFound, merr.Error())
 			return
 		}
-		u, perr := m.PresignGet(r.Context(), rel, e.Name, files.NeedsAttachment(e.Name))
-		if perr != nil {
-			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+perr.Error())
-			return
-		}
-		http.Redirect(w, r, u, http.StatusFound)
+		files.ServeMount(w, r, m, rel, e.Name, false, true)
 		return
 	}
 	f, err := s.files.Root().Open(sh.Path)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -166,7 +167,7 @@ func (m *S3Mount) Stat(ctx context.Context, rel string) (Entry, error) {
 
 // Open 打开对象用于读取;*minio.Object 实现 io.ReadSeekCloser,
 // 可直接交给 http.ServeContent 做 Range 流式。
-func (m *S3Mount) Open(ctx context.Context, rel string) (*minio.Object, Entry, error) {
+func (m *S3Mount) Open(ctx context.Context, rel string) (io.ReadSeekCloser, Entry, error) {
 	obj, err := m.client.GetObject(ctx, m.bucket, m.key(rel), minio.GetObjectOptions{})
 	if err != nil {
 		return nil, Entry{}, err
@@ -202,11 +203,13 @@ func (m *S3Mount) Mkdir(ctx context.Context, rel string) error {
 // listAll 递归列出 rel 下(含 rel 自身对象/目录标记)的全部对象 key。
 func (m *S3Mount) listAll(ctx context.Context, rel string) ([]string, error) {
 	var keys []string
+	seen := make(map[string]bool)
 	k := m.key(rel)
 	// rel 自身如果是对象(文件或目录标记)也纳入
 	for _, cand := range []string{k, k + "/"} {
 		if _, err := m.client.StatObject(ctx, m.bucket, cand, minio.StatObjectOptions{}); err == nil {
 			keys = append(keys, cand)
+			seen[cand] = true
 		}
 	}
 	ch, stop := m.listObjects(ctx, minio.ListObjectsOptions{Prefix: k + "/", Recursive: true})
@@ -215,7 +218,10 @@ func (m *S3Mount) listAll(ctx context.Context, rel string) ([]string, error) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
-		keys = append(keys, obj.Key)
+		if !seen[obj.Key] {
+			keys = append(keys, obj.Key)
+			seen[obj.Key] = true
+		}
 	}
 	return keys, nil
 }
@@ -264,10 +270,41 @@ func (m *S3Mount) Delete(ctx context.Context, rel string) error {
 }
 
 func (m *S3Mount) copyOne(ctx context.Context, srcKey, dstKey string) error {
-	_, err := m.client.CopyObject(ctx,
-		minio.CopyDestOptions{Bucket: m.bucket, Object: dstKey},
-		minio.CopySrcOptions{Bucket: m.bucket, Object: srcKey})
+	// CopyObject has no portable destination no-replace condition. A conditional
+	// PUT protects a destination created after the preflight check as well.
+	obj, err := m.client.GetObject(ctx, m.bucket, srcKey, minio.GetObjectOptions{})
+	if err != nil {
+		return err
+	}
+	defer obj.Close()
+	info, err := obj.Stat()
+	if err != nil {
+		return err
+	}
+	opts := minio.PutObjectOptions{PartSize: 8 << 20, ContentType: info.ContentType, UserMetadata: info.UserMetadata}
+	opts.SetMatchETagExcept("*")
+	_, err = m.client.PutObject(ctx, m.bucket, dstKey, obj, info.Size, opts)
+	if minio.ToErrorResponse(err).StatusCode == 412 {
+		return os.ErrExist
+	}
 	return err
+}
+
+func (m *S3Mount) requireAbsent(ctx context.Context, key string) error {
+	if _, err := m.client.StatObject(ctx, m.bucket, key, minio.StatObjectOptions{}); err == nil {
+		return os.ErrExist
+	} else if resp := minio.ToErrorResponse(err); resp.Code != "NoSuchKey" && resp.Code != "NotFound" {
+		return err
+	}
+	ch, stop := m.listObjects(ctx, minio.ListObjectsOptions{Prefix: key + "/", MaxKeys: 1})
+	defer stop()
+	for obj := range ch {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		return os.ErrExist
+	}
+	return nil
 }
 
 // Rename 同挂载内改名/移动(dstRel 为完整目标相对路径)。S3 无原子
@@ -279,6 +316,9 @@ func (m *S3Mount) Rename(ctx context.Context, srcRel, dstRel string) error {
 	}
 	if strings.HasPrefix(dstKey+"/", srcKey+"/") {
 		return errors.New("不能移动到自身内部")
+	}
+	if err := m.requireAbsent(ctx, dstKey); err != nil {
+		return err
 	}
 	// 文件:单对象
 	if _, err := m.client.StatObject(ctx, m.bucket, srcKey, minio.StatObjectOptions{}); err == nil {

@@ -39,7 +39,7 @@ var imageExts = map[string]bool{
 
 var videoExts = map[string]bool{
 	".mp4": true, ".webm": true, ".mkv": true, ".mov": true, ".avi": true,
-	".m4v": true, ".flv": true,
+	".m4v": true, ".flv": true, ".mts": true, ".m2ts": true,
 }
 
 type Service struct {

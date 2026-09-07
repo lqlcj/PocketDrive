@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '../api';
-import type { LocalUsage, Profile, RecentFile } from '../api';
+import type { LocalUsage, MountUsage, Profile, RecentFile } from '../api';
 import { fileKind, formatBytes, formatTime } from '../util';
 import KindIcon from './KindIcon';
 import { Button } from './ui/button';
@@ -13,6 +13,8 @@ import { Progress } from './ui/progress';
 export default function StorageSettingsCards({ profile }: { profile: Profile }) {
     const [recent, setRecent] = useState<RecentFile[]>([]);
     const [local, setLocal] = useState<LocalUsage | null>(null);
+    const [mounts, setMounts] = useState<MountUsage[]>([]);
+    const [storageError, setStorageError] = useState(false);
     const [davDirect, setDavDirect] = useState<boolean | null>(null);
     // 与服务端默认值一致，加载期间不会把 WebDAV 误显示为关闭。
     const [davEnabled, setDavEnabled] = useState<boolean | null>(true);
@@ -21,12 +23,33 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
     const [savingDav, setSavingDav] = useState(false);
 
     useEffect(() => {
-        api.storage()
-            .then((r) => {
+        let stopped = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const refresh = async () => {
+            let delay = 30000;
+            try {
+                const r = await api.storage();
+                if (stopped) return;
                 setRecent(r.recent ?? []);
                 setLocal(r.local);
-            })
-            .catch(() => undefined);
+                setMounts(r.mounts ?? []);
+                setStorageError(false);
+                if (r.local.pending || r.mounts?.some((mount) => mount.pending)) delay = 3000;
+            } catch {
+                if (stopped) return;
+                setStorageError(true);
+                delay = 10000;
+            }
+            if (!stopped) timer = setTimeout(refresh, delay);
+        };
+        void refresh();
+        return () => {
+            stopped = true;
+            clearTimeout(timer);
+        };
+    }, []);
+
+    useEffect(() => {
         api.cloudSettings()
             .then((r) => setDavDirect(r.settings.davDirect))
             .catch(() => undefined);
@@ -105,27 +128,20 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
 
             <Card className="h-full">
                 <CardTitle>仓库容量</CardTitle>
-                {local === null ? (
-                    <p className="text-sm text-ink-soft">读取中…</p>
-                ) : local.pending ? (
-                    <p className="text-sm text-ink-soft">用量统计中…</p>
-                ) : local.quota > 0 ? (
-                    <>
-                        <Progress percent={(local.bytes / local.quota) * 100} />
-                        <p className="text-sm text-ink-soft mt-1.5">
-                            已用 {formatBytes(local.bytes)} / 上限 {formatBytes(local.quota)}
-                            {local.files > 0 && `,${local.files} 个文件`}
-                            {local.bytes > local.quota && (
-                                <span className="text-danger"> · 已超出</span>
-                            )}
-                        </p>
-                    </>
-                ) : (
-                    <p className="text-sm text-ink-soft">
-                        已用 {formatBytes(local.bytes)}
-                        {local.files > 0 && `,${local.files} 个文件`}{' '}
-                        <span className="text-xs">(未设上限)</span>
+                {storageError && (
+                    <p role="status" className="text-sm text-danger mb-2">
+                        {local === null ? '容量读取失败，正在重试…' : '容量更新失败，当前显示上次数据'}
                     </p>
+                )}
+                {local === null ? (
+                    !storageError && <p className="text-sm text-ink-soft">读取中…</p>
+                ) : (
+                    <div className="divide-y divide-line">
+                        <StorageUsage name="本机存储" usage={local} />
+                        {[...mounts].sort((a, b) => a.name.localeCompare(b.name)).map((mount) => (
+                            <StorageUsage key={mount.name} name={`@${mount.name}`} usage={mount} />
+                        ))}
+                    </div>
                 )}
             </Card>
 
@@ -190,5 +206,28 @@ export default function StorageSettingsCards({ profile }: { profile: Profile }) 
                 </div>
             </Card>
         </>
+    );
+}
+
+function StorageUsage({ name, usage }: { name: string; usage: LocalUsage }) {
+    return (
+        <div className="py-3 first:pt-0 last:pb-0 min-w-0">
+            <div className="text-sm font-bold break-all mb-1.5">{name}</div>
+            {usage.pending ? (
+                <p className="text-sm text-ink-soft" role="status">用量统计中…</p>
+            ) : (
+                <>
+                    {usage.quota > 0 && <Progress percent={(usage.bytes / usage.quota) * 100} />}
+                    <p className="text-sm text-ink-soft mt-1.5 break-words">
+                        已用 {formatBytes(usage.bytes)}
+                        {usage.quota > 0 ? ` / 上限 ${formatBytes(usage.quota)}` : ' · 未设上限'}
+                        {` · ${usage.files} 个文件`}
+                        {usage.quota > 0 && usage.bytes > usage.quota && (
+                            <span className="text-danger"> · 已超出</span>
+                        )}
+                    </p>
+                </>
+            )}
+        </div>
     );
 }

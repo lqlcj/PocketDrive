@@ -31,12 +31,12 @@ type Item struct {
 
 var extKind = map[string]string{
 	".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image",
-	".webp": "image", ".svg": "image", ".bmp": "image", ".avif": "image",
+	".webp": "image", ".svg": "image", ".bmp": "image", ".avif": "image", ".ico": "image",
 	".mp4": "video", ".webm": "video", ".mkv": "video", ".mov": "video",
-	".avi": "video", ".m4v": "video", ".flv": "video",
+	".avi": "video", ".m4v": "video", ".flv": "video", ".mts": "video", ".m2ts": "video",
 	".mp3": "audio", ".m4a": "audio", ".flac": "audio", ".wav": "audio",
 	".ogg": "audio", ".aac": "audio", ".opus": "audio", ".wma": "audio",
-	".md": "markdown",
+	".md": "markdown", ".markdown": "markdown",
 }
 
 func kindOf(name string) string {

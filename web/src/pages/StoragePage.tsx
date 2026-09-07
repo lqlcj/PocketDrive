@@ -12,6 +12,9 @@ import { Badge, Progress } from '../components/ui/progress';
 import { Dialog, DialogContent } from '../components/ui/dialog';
 
 const EMPTY: StoragePolicyInput = {
+    type: 's3',
+    username: '',
+    password: '',
     name: '',
     endpoint: '',
     region: '',
@@ -67,6 +70,9 @@ export default function StoragePage() {
 
     const openEdit = (p: StoragePolicy) => {
         setForm({
+            type: p.type === 'webdav' ? 'webdav' : 's3',
+            username: p.username ?? '',
+            password: '',
             name: p.name,
             endpoint: p.endpoint,
             region: p.region,
@@ -84,7 +90,7 @@ export default function StoragePage() {
         setTesting(true);
         try {
             await api.testStorage({ ...form, id: editingId });
-            toast.success('连接成功,桶可正常访问');
+            toast.success('连接成功');
         } catch (e) {
             toast.error(e instanceof Error ? e.message : '连接失败');
         } finally {
@@ -110,7 +116,7 @@ export default function StoragePage() {
         if (!deleteTarget) return;
         try {
             await api.deleteStorage(deleteTarget.id);
-            toast.success('已删除挂载(桶里的文件不受影响)');
+            toast.success('已删除挂载(远程文件不受影响)');
             setDeleteTarget(null);
             load();
         } catch (e) {
@@ -144,8 +150,9 @@ export default function StoragePage() {
         type = 'text',
     ) => (
         <div>
-            <label className="block text-xs font-bold text-ink-soft mb-1">{label}</label>
+            <label htmlFor={`storage-${key}`} className="block text-xs font-bold text-ink-soft mb-1">{label}</label>
             <Input
+                id={`storage-${key}`}
                 type={type}
                 value={String(form[key] ?? '')}
                 placeholder={placeholder}
@@ -161,7 +168,7 @@ export default function StoragePage() {
                 <h2 className="text-xl font-extrabold">存储策略</h2>
                 <div className="ml-auto flex gap-2">
                     <Button variant="primary" size="sm" onClick={openAdd}>
-                        <Plus className="size-3.5" /> 添加 S3/R2 存储
+                        <Plus className="size-3.5" /> 添加外部存储
                     </Button>
                 </div>
             </div>
@@ -237,8 +244,7 @@ export default function StoragePage() {
                 <Card className="text-center text-ink-soft py-10 text-sm">加载中…</Card>
             ) : policies.length === 0 ? (
                 <Card className="text-center text-ink-soft py-10 text-sm">
-                    还没有外部存储。点右上角「添加 S3/R2 存储」接入 Cloudflare R2、
-                    AWS S3 或其他 S3 兼容服务
+                    还没有外部存储。点右上角「添加外部存储」接入 Cloudflare R2、AWS S3 或远程 WebDAV
                 </Card>
             ) : (
                 <div className="flex flex-col gap-3">
@@ -251,7 +257,7 @@ export default function StoragePage() {
                                         @{p.name}
                                         <span className="text-ink-soft font-normal">
                                             {' '}
-                                            · {p.bucket}
+                                            · {p.type === 'webdav' ? 'WebDAV' : p.bucket}
                                             {p.basePath && `/${p.basePath}`}
                                         </span>
                                     </div>
@@ -308,7 +314,7 @@ export default function StoragePage() {
             <Card className="mt-4 text-xs text-ink-soft leading-relaxed">
                 <div className="font-bold text-sm text-ink mb-1.5">说明</div>
                 <p>
-                    · 上传由服务器中转、下载 302 到预签名地址,浏览器只和本站通信,
+                    · S3 上传由服务器中转、下载 302 到预签名地址,浏览器只和本站通信,
                     <b>桶上无需配置 CORS</b>,私有桶即可,不用开公开访问
                 </p>
                 <b>· Cloudflare R2绑定详细教程:
@@ -325,17 +331,34 @@ export default function StoragePage() {
             {/* 添加/编辑 */}
             <Dialog open={editOpen} onOpenChange={(o) => !o && setEditOpen(false)}>
                 <DialogContent
-                    title={editingId ? `编辑 @${form.name}` : '添加 S3/R2 存储'}
+                    title={editingId ? `编辑 @${form.name}` : '添加外部存储'}
                     className="max-w-2xl"
                 >
                     <div className="flex flex-col gap-3">
-                        <div className="grid grid-cols-2 gap-3">
+                        <label className="text-xs font-bold text-ink-soft">
+                            存储类型
+                            <select
+                                className="block w-full mt-1 border border-line rounded-md p-2 bg-transparent text-sm"
+                                value={form.type ?? 's3'}
+                                disabled={editingId !== undefined}
+                                onChange={(e) => setForm({ ...EMPTY, type: e.target.value as 's3' | 'webdav' })}
+                            >
+                                <option value="s3">S3 / R2</option>
+                                <option value="webdav">WebDAV</option>
+                            </select>
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {field('挂载名称(将显示为 @名称 文件夹)', 'name', '例如 R2')}
                             {field(
                                 'Endpoint',
                                 'endpoint',
-                                'https://xxxx.r2.cloudflarestorage.com',
+                                form.type === 'webdav' ? 'https://vps.example.com/dav/' : 'https://xxxx.r2.cloudflarestorage.com',
                             )}
+                            {form.type === 'webdav' ? <>
+                                {field('用户名', 'username', '')}
+                                {field(editingId ? '密码(留空 = 不修改)' : '密码', 'password', '', 'password')}
+                                {field('远程子目录(可选)', 'basePath', '')}
+                            </> : <>
                             {field('Bucket 桶名', 'bucket', 'my-bucket')}
                             {field('Region(R2 留空)', 'region', 'auto')}
                             {field('Access Key ID', 'accessKey', '')}
@@ -348,6 +371,7 @@ export default function StoragePage() {
                                 '',
                                 'password',
                             )}
+                            </>}
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-ink-soft mb-1">
@@ -387,7 +411,7 @@ export default function StoragePage() {
             <Dialog open={deleteTarget !== null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
                 <DialogContent title={`删除挂载 @${deleteTarget?.name ?? ''}`}>
                     <p className="text-sm">
-                        只是取消挂载,<b>桶里的文件不会被删除</b>
+                        只是取消挂载,<b>远程文件不会被删除</b>
                         。之前生成的该存储文件分享链接会失效。确定删除?
                     </p>
                     <div className="flex justify-end gap-2 mt-4">

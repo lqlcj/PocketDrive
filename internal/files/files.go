@@ -19,6 +19,7 @@ import (
 	"pocketdrive/internal/cloud"
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/safefs"
 )
 
 const maxTextPreview = 2 << 20 // 2 MiB
@@ -114,6 +115,13 @@ func (s *Service) localReservations(excludeSession string) (int64, int64, int64)
 	byPath := make(map[string]int64)
 	var dataTemporary, stagingRemaining int64
 	for i := range sessions {
+		staged := s.stagedSize(sessions[i].ID)
+		if staged < sessions[i].Size {
+			stagingRemaining += sessions[i].Size - staged
+		}
+		if cloud.IsMountPath(sessions[i].Path) {
+			continue
+		}
 		old := s.localFileSize(sessions[i].Path)
 		if delta := sessions[i].Size - old; delta > byPath[sessions[i].Path] {
 			byPath[sessions[i].Path] = delta
@@ -123,10 +131,6 @@ func (s *Service) localReservations(excludeSession string) (int64, int64, int64)
 		// the full atomic-assembly demand reserved on the data filesystem even
 		// after chunks have already been staged elsewhere.
 		dataTemporary += sessions[i].Size
-		staged := s.stagedSize(sessions[i].ID)
-		if staged < sessions[i].Size {
-			stagingRemaining += sessions[i].Size - staged
-		}
 	}
 	var additional int64
 	for _, delta := range byPath {
@@ -182,8 +186,10 @@ func (s *Service) createLocalSession(us *db.UploadSession) error {
 			additional = current
 		}
 	}
-	if err := s.checkLocalSpace(additional+reservedAdditional, us.Size+reservedTemporary); err != nil {
-		return err
+	if !cloud.IsMountPath(us.Path) {
+		if err := s.checkLocalSpace(additional+reservedAdditional, us.Size+reservedTemporary); err != nil {
+			return err
+		}
 	}
 	if err := s.checkPathSpace(s.tmpDir, us.Size+reservedStaging); err != nil {
 		return err
@@ -236,7 +242,7 @@ func (s *Service) cloudReservations(name, candidatePath, excludeSession string, 
 		return candidate
 	}
 	var sessions []db.UploadSession
-	q := s.db.Where("s3_upload_id <> ''")
+	q := s.db.Where("path LIKE '@%'")
 	if excludeSession != "" {
 		q = q.Where("id <> ?", excludeSession)
 	}
@@ -375,7 +381,7 @@ func (s *Service) atomicWriteLocked(p string, r io.Reader, expected int64, exclu
 		_ = s.root.Remove(tmp)
 		return 0, 0, err
 	}
-	if err := s.root.Rename(tmp, p); err != nil {
+	if err := safefs.Replace(s.root, tmp, p); err != nil {
 		_ = s.root.Remove(tmp)
 		return 0, 0, err
 	}
@@ -428,7 +434,7 @@ func (s *Service) Root() *os.Root { return s.root }
 // resolveMount 处理外部存储路径:返回挂载与挂载内相对路径。挂载名
 // 不存在时直接写 404 并返回 handled=false 之外的信号——调用方约定:
 // (nil, "", true) 表示"是挂载路径但已出错响应,不要继续"。
-func (s *Service) resolveMount(w http.ResponseWriter, p string) (*cloud.S3Mount, string, bool) {
+func (s *Service) resolveMount(w http.ResponseWriter, p string) (cloud.Mount, string, bool) {
 	m, rel, ok := s.cloud.Resolve(p)
 	if !ok {
 		httpx.Err(w, http.StatusNotFound, "外部存储不存在或未挂载")
@@ -594,7 +600,7 @@ func (s *Service) HandleMkdir(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	dir := CleanPath(r.URL.Query().Get("path"))
-	var mnt *cloud.S3Mount
+	var mnt cloud.Mount
 	var mntRel string
 	if cloud.IsMountPath(dir) {
 		m, rel, bad := s.resolveMount(w, dir)
@@ -638,7 +644,7 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if mnt != nil {
 			// 配额是软限制:统计还没跑过时放行,不会因为算不出用量就堵死上传
-			if err := s.cloud.CheckQuota(mnt.Name, 0); err != nil {
+			if err := s.cloud.CheckQuota(mnt.MountName(), 0); err != nil {
 				part.Close()
 				httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 				return
@@ -656,7 +662,7 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				httpx.Err(w, http.StatusBadGateway, "上传到外部存储失败: "+err.Error())
 				return
 			}
-			s.cloud.AddUsage(mnt.Name, counted.n-oldSize)
+			s.cloud.AddUsage(mnt.MountName(), counted.n-oldSize)
 		} else {
 			if err := s.checkLocal(0); err != nil {
 				part.Close()
@@ -698,13 +704,7 @@ func (s *Service) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		}
 		// 302 到预签名 URL:浏览器/播放器直连存储桶,不过 VPS 中转,
 		// 媒体加载不受同源策略限制,无需给桶配任何 CORS
-		u, err := m.PresignGet(r.Context(), rel, path.Base(rel),
-			r.URL.Query().Get("dl") == "1" || NeedsAttachment(path.Base(rel)))
-		if err != nil {
-			httpx.Err(w, http.StatusBadGateway, "生成下载链接失败: "+err.Error())
-			return
-		}
-		http.Redirect(w, r, u, http.StatusFound)
+		ServeMount(w, r, m, rel, path.Base(rel), r.URL.Query().Get("dl") == "1", false)
 		return
 	}
 	f, err := s.root.Open(p)
@@ -803,7 +803,7 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 		if additional < 0 {
 			additional = 0
 		}
-		if err := s.cloud.CheckQuota(m.Name, additional); err != nil {
+		if err := s.cloud.CheckQuota(m.MountName(), additional); err != nil {
 			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 			return
 		}
@@ -812,7 +812,7 @@ func (s *Service) HandleWrite(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusBadGateway, "写入外部存储失败: "+err.Error())
 			return
 		}
-		s.cloud.AddUsage(m.Name, int64(len(req.Content))-oldSize)
+		s.cloud.AddUsage(m.MountName(), int64(len(req.Content))-oldSize)
 		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
@@ -882,13 +882,21 @@ func (s *Service) HandleRename(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := m.Rename(r.Context(), rel,
 			path.Join(path.Dir(rel), req.NewName)); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				httpx.Err(w, http.StatusConflict, "目标已存在，请先处理同名文件")
+				return
+			}
 			httpx.Err(w, http.StatusBadGateway, err.Error())
 			return
 		}
 		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	if err := s.root.Rename(p, path.Join(path.Dir(p), req.NewName)); err != nil {
+	if err := safefs.Rename(s.root, p, path.Join(path.Dir(p), req.NewName)); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			httpx.Err(w, http.StatusConflict, "目标已存在，请先处理同名文件")
+			return
+		}
 		httpx.Err(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -933,6 +941,10 @@ func (s *Service) HandleMove(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := ms.Rename(r.Context(), srel, path.Join(drel, path.Base(srel))); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				httpx.Err(w, http.StatusConflict, "目标已存在，请先处理同名文件")
+				return
+			}
 			httpx.Err(w, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -944,7 +956,11 @@ func (s *Service) HandleMove(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "目标文件夹不存在")
 		return
 	}
-	if err := s.root.Rename(src, path.Join(dest, path.Base(src))); err != nil {
+	if err := safefs.Rename(s.root, src, path.Join(dest, path.Base(src))); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			httpx.Err(w, http.StatusConflict, "目标已存在，请先处理同名文件")
+			return
+		}
 		httpx.Err(w, http.StatusBadRequest, err.Error())
 		return
 	}

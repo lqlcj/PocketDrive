@@ -12,10 +12,12 @@ export function DialogContent({
     className,
     children,
     title,
+    headerActions,
     wide,
     ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+}: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, 'title'> & {
     title: React.ReactNode;
+    headerActions?: React.ReactNode;
     wide?: boolean;
 }) {
     return (
@@ -29,10 +31,11 @@ export function DialogContent({
                 )}
                 {...props}
             >
-                <div className="flex items-center gap-2 mb-3">
+                <div data-dialog-header className="flex items-center gap-2 mb-3">
                     <DialogPrimitive.Title className="font-extrabold text-base flex-1 min-w-0 truncate">
                         {title}
                     </DialogPrimitive.Title>
+                    {headerActions}
                     <DialogPrimitive.Close asChild>
                         <Button variant="ghost" size="icon" aria-label="关闭">
                             <X className="size-4" />

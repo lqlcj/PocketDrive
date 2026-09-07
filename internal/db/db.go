@@ -63,13 +63,15 @@ type FolderIcon struct {
 type StoragePolicy struct {
 	ID        uint   `gorm:"primaryKey" json:"id"`
 	Name      string `gorm:"uniqueIndex;size:32" json:"name"`
-	Type      string `gorm:"size:16" json:"type"` // s3
+	Type      string `gorm:"size:16" json:"type"` // s3 | webdav
 	Endpoint  string `json:"endpoint"`
 	Region    string `json:"region"`
 	Bucket    string `json:"bucket"`
 	AccessKey string `json:"accessKey"`
 	SecretKey string `json:"-"`
 	BasePath  string `json:"basePath"` // 桶内前缀,可空
+	Username  string `json:"username"`
+	Password  string `json:"-"`
 	// QuotaBytes 是这个挂载的容量上限,0 = 不限。软限制:用量靠定期
 	// 遍历统计,刚写入的文件可能还没算进去。
 	QuotaBytes int64     `json:"quotaBytes"`

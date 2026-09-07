@@ -15,15 +15,15 @@ import (
 
 // mockAria2 is a minimal aria2 JSON-RPC server for regression tests.
 type mockAria2 struct {
-	t              *testing.T
-	statuses       map[string]*Status // gid -> status
-	added          []string           // uris received by addUri
-	addPaused      []string           // pause option received by addUri
-	dirs           []string
-	torrentPaused  []string // pause option received by addTorrent
-	lastSelect     string   // select-file passed to changeOption
-	unpaused       []string // gids passed to aria2.unpause
-	nextGID        int
+	t             *testing.T
+	statuses      map[string]*Status // gid -> status
+	added         []string           // uris received by addUri
+	addPaused     []string           // pause option received by addUri
+	dirs          []string
+	torrentPaused []string // pause option received by addTorrent
+	lastSelect    string   // select-file passed to changeOption
+	unpaused      []string // gids passed to aria2.unpause
+	nextGID       int
 }
 
 func (m *mockAria2) handler(w http.ResponseWriter, r *http.Request) {
@@ -387,9 +387,9 @@ func TestFriendlyErr(t *testing.T) {
 		{"Timeout.", "Timeout."},
 		{
 			"Failed to make the directory /data/x, cause: Permission denied",
-			"PUID=0",
+			"检查 /data 是否可写挂载",
 		},
-		{"Download aborted.", "PUID=0"},
+		{"Download aborted.", "检查 /data 是否可写挂载"},
 	}
 	for _, c := range cases {
 		got := friendlyErr(c.in)
@@ -542,8 +542,8 @@ func TestMagnetHash(t *testing.T) {
 		t.Fatalf("带后续参数应只抠出 btih,得到 %q, %v", h, err)
 	}
 	for _, bad := range []string{
-		"magnet:?dn=foo",                       // 没有 btih
-		"magnet:?xt=urn:btih:abcdef",           // 不是 40 位
+		"magnet:?dn=foo",                                 // 没有 btih
+		"magnet:?xt=urn:btih:abcdef",                     // 不是 40 位
 		"magnet:?xt=urn:btih:" + strings.Repeat("z", 40), // 不是 hex
 	} {
 		if _, err := magnetHash(bad); err == nil {

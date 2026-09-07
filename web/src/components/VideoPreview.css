@@ -1,0 +1,91 @@
+.pd-video-preview {
+    min-width: 0;
+    --plyr-color-main: var(--leaf-dark);
+    --plyr-font-family: inherit;
+    --plyr-control-radius: 4px;
+}
+
+.pd-video-preview video {
+    display: block;
+    width: 100%;
+    height: min(55vh, 36rem);
+    object-fit: contain;
+    background: #000;
+}
+
+.pd-video-preview .plyr {
+    border-radius: 8px;
+    height: min(55vh, 36rem);
+    height: min(55dvh, 36rem);
+    min-height: 0;
+    min-width: 0;
+}
+
+/* Plyr writes the source aspect ratio inline, which otherwise stretches portrait videos. */
+.pd-video-preview .plyr .plyr__video-wrapper {
+    height: 100%;
+    min-height: 0;
+    aspect-ratio: auto !important;
+    padding-bottom: 0 !important;
+}
+
+.pd-video-preview .plyr video {
+    height: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.pd-video-preview .plyr:fullscreen,
+.pd-video-preview .plyr--fullscreen-active {
+    height: 100%;
+}
+
+.pd-video-preview .plyr--fullscreen-active video {
+    height: 100%;
+    max-height: none;
+}
+
+.pd-video-preview-scroll {
+    display: flex;
+    overflow: hidden;
+    scrollbar-gutter: auto;
+}
+
+.pd-video-preview-scroll .pd-video-preview {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+}
+
+.pd-video-preview-scroll .pd-video-host,
+.pd-video-preview-scroll .pd-video-preview .plyr,
+.pd-video-preview-scroll .pd-video-preview video {
+    height: 100%;
+    border-radius: 0;
+}
+
+.pd-video-preview-scroll [role='status'] {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    pointer-events: none;
+    color: #fff;
+}
+
+@media (max-width: 480px) {
+    .pd-video-preview .plyr__controls {
+        gap: 2px;
+        padding-inline: 6px;
+    }
+
+    .pd-video-preview .plyr__time--duration,
+    .pd-video-preview .plyr__volume input[type='range'] {
+        display: none;
+    }
+
+    .pd-video-preview .plyr__volume {
+        flex: 0 0 auto;
+        min-width: 0;
+    }
+}

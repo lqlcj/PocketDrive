@@ -249,7 +249,7 @@ func (m *Manager) taskOpts(relDir string, bt bool) map[string]string {
 		"dir":       dir,
 		"seed-time": strconv.Itoa(s.SeedTimeMin),
 	}
-	if bt && s.TrackerAuto {
+	if bt && (s.TrackerAuto || m.customTrackers().List != "") {
 		if t := m.trackers(); t != "" {
 			opts["bt-tracker"] = t
 		}
@@ -286,11 +286,9 @@ func (m *Manager) ensureDir(relDir string) {
 // initAndOpenFile() 抛异常时的**外层**文案,真正的原因(多半是
 // Permission denied)只留在 aria2 自己的日志里、不会经 RPC 传出来。
 // 加上 BT 那条明说 Permission denied 的,两者根因是同一个:
-// p3terx/aria2-pro 默认让 aria2c 以 nobody(65534)运行,写不进
-// PocketDrive 以 root 建的目录。
+// 两个容器的运行用户或挂载权限不一致时,aria2 无法写入下载目录。
 func friendlyErr(msg string) string {
-	const fix = "(aria2 容器写不进网盘目录:给 aria2 服务加上 PUID=0 / PGID=0 " +
-		"后 docker compose up -d,或直接重跑一次安装脚本)"
+	const fix = "(aria2 容器可能写不进网盘目录:检查 /data 是否可写挂载,并确认两个容器的运行用户都有目录写权限)"
 	switch {
 	case strings.Contains(msg, "Permission denied"):
 		return msg + " " + fix

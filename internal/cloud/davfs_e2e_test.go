@@ -61,7 +61,7 @@ func TestE2EWebDAV(t *testing.T) {
 	m := testMount(t)
 
 	// 只挂一个存储,不碰 DB——DavFS 只用到 Resolve/Names
-	svc := &Service{mounts: map[string]*S3Mount{m.Name: m}}
+	svc := &Service{mounts: map[string]Mount{m.Name: m}}
 
 	localDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(localDir, "本机文件.txt"), []byte("local"), 0o644); err != nil {
@@ -184,16 +184,16 @@ func TestE2EWebDAV(t *testing.T) {
 		}
 	})
 
-	t.Run("DELETE 目录", func(t *testing.T) {
+	t.Run("DELETE 目录被保护", func(t *testing.T) {
 		resp := c.do("DELETE", mnt+"/"+root, nil, nil)
 		resp.Body.Close()
-		if resp.StatusCode/100 != 2 {
-			t.Fatalf("DELETE → %d", resp.StatusCode)
+		if resp.StatusCode/100 == 2 {
+			t.Fatalf("DELETE unexpectedly succeeded: %d", resp.StatusCode)
 		}
 		got := c.do("GET", mnt+"/"+root+"/"+url.PathEscape("改名 renamed.txt"), nil, nil)
 		got.Body.Close()
-		if got.StatusCode != http.StatusNotFound {
-			t.Errorf("删除后仍可读 → %d", got.StatusCode)
+		if got.StatusCode != http.StatusOK {
+			t.Errorf("protected file is no longer readable: %d", got.StatusCode)
 		}
 	})
 }

@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import {
     Archive,
+    BookOpen,
     File,
     FileCode2,
     FileSpreadsheet,
@@ -28,6 +29,7 @@ const MAP: Record<FileKind, { Icon: ComponentType<{ className?: string }>; cls: 
     sheet: { Icon: FileSpreadsheet, cls: 'text-emerald-600 dark:text-emerald-400' },
     slide: { Icon: Presentation, cls: 'text-orange-600 dark:text-orange-400' },
     pdf: { Icon: FileText, cls: 'text-red-600 dark:text-red-400' },
+    epub: { Icon: BookOpen, cls: 'text-teal-600 dark:text-teal-400' },
     other: { Icon: File, cls: 'text-ink-soft' },
 };
 

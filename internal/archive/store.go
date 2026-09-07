@@ -129,7 +129,7 @@ func (l localFS) create(ctx context.Context, p string, r io.Reader, size int64) 
 // ---- 外部存储 ----
 
 type mountFS struct {
-	m   *cloud.S3Mount
+	m   cloud.Mount
 	svc *cloud.Service
 }
 
@@ -162,8 +162,19 @@ func (x mountFS) open(ctx context.Context, p string) (io.ReadCloser, error) {
 // mkdirAll 对 S3 是个空操作:对象 key 里带斜杠就足以表达层级,
 // 只有需要空目录可见时才写目录标记。
 func (x mountFS) mkdirAll(ctx context.Context, p string) error {
-	if p == "" {
+	if p == "" || p == "." {
 		return nil
+	}
+	if _, ok := x.m.(*cloud.WebDAVMount); ok {
+		if e, err := x.m.Stat(ctx, p); err == nil {
+			if !e.Dir {
+				return errors.New("目标路径不是目录")
+			}
+			return nil
+		}
+		if err := x.mkdirAll(ctx, path.Dir(p)); err != nil {
+			return err
+		}
 	}
 	return x.m.Mkdir(ctx, p)
 }
@@ -177,14 +188,14 @@ func (x mountFS) create(ctx context.Context, p string, r io.Reader, size int64) 
 	if additional < 0 || size < 0 {
 		additional = 0
 	}
-	if err := x.svc.CheckQuota(x.m.Name, additional); err != nil {
+	if err := x.svc.CheckQuota(x.m.MountName(), additional); err != nil {
 		return err
 	}
 	counted := &countReader{r: r}
 	if err := x.m.Put(ctx, p, counted, size); err != nil {
 		return err
 	}
-	x.svc.AddUsage(x.m.Name, counted.n-oldSize)
+	x.svc.AddUsage(x.m.MountName(), counted.n-oldSize)
 	return nil
 }
 

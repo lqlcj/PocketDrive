@@ -87,20 +87,12 @@ services:
         depends_on:
             - aria2
     aria2:
-        image: p3terx/aria2-pro
+        image: ghcr.io/lqlcj/pocketdrive-aria2:latest
         container_name: pocketdrive-aria2
         restart: unless-stopped
+        stop_grace_period: 60s
         environment:
             - RPC_SECRET=请填一段随机的 RPC 密钥跟上面相同
-            # BT 监听端口(可选,不开也能下载)
-            - LISTEN_PORT=6888
-            - MAX_CONCURRENT_DOWNLOADS=3
-            # 这三行不能省:镜像默认让 aria2c 以 nobody(65534)运行,
-            # 写不进 PocketDrive 以 root 建的目录,表现为下载任务报
-            # "Permission denied" 或 "Download aborted."
-            - PUID=0
-            - PGID=0
-            - UMASK_SET=022
         volumes:
             - ./data:/data
             # 挂出来,容器重启后没下完的任务还能接着下
@@ -162,6 +154,11 @@ docker compose up -d
 
 这会同时更新 PocketDrive、ffmpeg 和 aria2,不会删除 `data/`、`config/` 中的数据。
 
+aria2 现在使用本项目维护的 `ghcr.io/lqlcj/pocketdrive-aria2` 镜像,基于 Alpine
+软件包构建,每周自动重建。从 `p3terx/aria2-pro` 升级时需要修改编排中的镜像名;
+仅拉取旧镜像不会切换。一键脚本会在切换前停止旧服务并备份 aria2 配置。
+手动升级、会话迁移及回退步骤见 [aria2 镜像说明](docker/aria2/README.md)。
+
 ### 卸载
 
 ```bash
@@ -175,7 +172,7 @@ docker compose down -v
 cd / && rm -rf /opt/pocketdrive
 
 # 3. 顺手清掉镜像(可选)
-docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
+docker rmi ghcr.io/lqlcj/pocketdrive:latest ghcr.io/lqlcj/pocketdrive-aria2:latest
 ```
 
 删之前如需保留数据,请先复制编排目录里的 `data/` 和 `config/` 两个目录。
@@ -218,7 +215,7 @@ docker rmi ghcr.io/lqlcj/pocketdrive:latest p3terx/aria2-pro
 
 ## 本机开发(Windows)
 
-本机开发只需确保 Go、Node.js 和 ffmpeg 可用（安装后需重启终端）：
+本机开发需要 Go 1.26.8+、Node.js 24 和 ffmpeg（安装后需重启终端）：
 
 ```powershell
 winget install Gyan.FFmpeg.Shared
@@ -240,7 +237,15 @@ cd web; npm install; npm run dev
 - 登录失败限流:同 IP 连错 5 次封 5 分钟;WebDAV Basic Auth,bcrypt + 成功凭据缓存
 - 文件操作全部经 `os.Root`(Go 1.25+)防路径穿越/symlink 逃逸
 - aria2 通过 RPC 通信;上传的 .torrent 做 bencode 头校验 + 16MB 上限
-- DOCX 预览由 docx-preview 在前端渲染,后端不解析文档;XLS/XLSX/PPTX 请下载后本地打开
+- DOCX 在禁止脚本的 sandbox iframe 内预览，禁用内嵌 HTML 和文档链接，并用 CSP 限制网络请求。
+- 本机 WebDAV 上传先写临时文件，完整接收并落盘后才替换目标；中断或长度不符时保留原文件。
+- 网页重命名、移动及 WebDAV MOVE/COPY 拒绝同名覆盖。S3 移动通过条件上传保护目标，会经过服务器中转；存储端需支持 `If-None-Match` 条件写入。
+- 本机 WebDAV 删除进入回收站，可在网页恢复；回收站和上传临时文件不向 WebDAV 暴露。外部存储缺少统一回收站，因此拒绝 WebDAV DELETE；网页端外部存储的永久删除仍需谨慎操作。
+
+安全回归验证：先运行 `npm --prefix web run build`，再运行 `go test ./...` 和
+`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`。
+`node scripts/security-preview-smoke.mjs` 使用模拟接口检查恶意 DOCX 在桌面及手机视口的隔离，
+默认使用本机 Edge；可用 `BROWSER_PATH` 指定 Chromium 浏览器路径。截图保存在 `web/shots/security/`，不读写网盘数据。
 
 ## 常见问题
 
@@ -263,7 +268,8 @@ docker logs --since 168h pocketdrive | grep -E "\[删除\]|\[清理\]|\[消失\]
   1. 编排里 `/data` 是不是绑到了宿主机目录(而不是匿名卷)。匿名卷会被
      `docker system prune --volumes` 和面板的「清理无用卷」一起带走:
      `docker inspect pocketdrive --format '{{json .Mounts}}'`
-  2. aria2 容器有没有配「下载完成/停止就删文件」的钩子:
+  2. 旧版第三方 aria2 容器有没有配「下载完成/停止就删文件」的钩子
+     (新镜像不读取此文件,也没有配置删除钩子):
      `grep -nE '^\s*on-(download|bt-download)' config/aria2/aria2.conf`
   3. 服务器上的定时清理任务(面板的计划任务、`crontab -l`、`/etc/cron.daily/`)
 
@@ -273,13 +279,10 @@ docker logs --since 168h pocketdrive | grep -E "\[删除\]|\[清理\]|\[消失\]
 
 **离线下载报 `Download aborted.`,BT 报 `Failed to make the directory ..., cause: Permission denied`**
 
-aria2 容器写不进网盘目录。`p3terx/aria2-pro` 镜像里 aria2c 固定以 `p3terx`
-用户运行,不设 `PUID`/`PGID` 时它是 **65534(nobody)**;而 PocketDrive 以 root
-建目录(`root:root 0755`),nobody 自然写不进去。`Download aborted.` 是 aria2
-建文件失败时的外层文案,真正的原因不会经 RPC 传出来,所以看着像另一个问题。
-
-修法:给 aria2 服务加上 `PUID=0` / `PGID=0` 后 `docker compose up -d`,
-或者直接重跑一次安装脚本(见上面的「方式一:VPS 一键安装」)。
+检查 aria2 和 PocketDrive 的 `/data` 是否挂载了同一个目录、是否可写,
+以及两个容器的运行用户是否都有目录写权限。新镜像默认与主容器一样以 root
+运行,不再使用 `PUID` / `PGID` 环境变量。`Download aborted.` 也可能有其他
+原因,请结合 `docker logs pocketdrive-aria2` 查看具体错误。
 
 **复制按钮点了没反应/提示复制失败**
 

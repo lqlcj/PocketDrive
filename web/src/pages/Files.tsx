@@ -1386,7 +1386,7 @@ export default function Files() {
                                                         {e.dir ? '-' : formatBytes(e.size)}
                                                     </span>
                                                     <span className="text-xs text-ink-soft w-28 text-right hidden xl:block shrink-0">
-                                                        {formatTime(e.mtime)}
+                                                        {e.mtime ? formatTime(e.mtime) : '-'}
                                                     </span>
                                                     {actions(e)}
                                                 </div>

@@ -39,24 +39,15 @@ services:
         depends_on:
             - aria2
     aria2:
-        image: p3terx/aria2-pro
+        image: ghcr.io/lqlcj/pocketdrive-aria2:latest
+        # build:
+        #     context: ..
+        #     dockerfile: docker/aria2/Dockerfile
         container_name: pocketdrive-aria2
         restart: unless-stopped
+        stop_grace_period: 60s
         environment:
             - RPC_SECRET=${ARIA2_SECRET:?请设置随机的 ARIA2_SECRET}
-            # BT 监听端口(需要在防火墙放行 TCP+UDP,不开也能下载只是慢)
-            - LISTEN_PORT=6888
-            # 2G VPS 资源限制
-            - MAX_CONCURRENT_DOWNLOADS=3
-            # 这两行不能删。镜像里 aria2c 固定以 p3terx 用户跑,PUID/PGID
-            # 不设时是 65534(nobody);而 PocketDrive 以 root 建目录
-            # (root:root 0755),nobody 写不进去 —— 表现为 BT 报
-            # "Failed to make the directory ..., cause: Permission denied",
-            # 普通直链报 "Download aborted."(aria2 建文件失败时的外层文案)。
-            # 两个容器统一用 root,共享 /data 才不会打架。
-            - PUID=0
-            - PGID=0
-            - UMASK_SET=022
         volumes:
             - ./data:/data
             # aria2 自己的配置与会话。挂出来,容器重启/升级后未完成的任务

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Copy, Download, FileText, Github, Leaf, Play } from 'lucide-react';
+import { Copy, Download, Eye, FileText, Github, Leaf, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
 import type { ShareInfo } from '../api';
@@ -8,7 +8,10 @@ import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import KindIcon from '../components/KindIcon';
-import { browserPlayable, copyText, fileKind, formatBytes, formatTime } from '../util';
+import { videoPlaybackMode, copyText, fileKind, formatBytes, formatTime } from '../util';
+import VideoPreview from '../components/VideoPreview';
+import Preview from '../components/Preview';
+import { PlayerProvider } from '../player/store';
 
 export default function SharePage() {
     const { token = '' } = useParams();
@@ -18,6 +21,7 @@ export default function SharePage() {
     const [unlocked, setUnlocked] = useState(false);
     const [unlocking, setUnlocking] = useState(false);
     const [playing, setPlaying] = useState(false);
+    const [previewOpen, setPreviewOpen] = useState(false);
 
     useEffect(() => {
         setInfo(null);
@@ -25,6 +29,7 @@ export default function SharePage() {
         setPassword('');
         setUnlocked(false);
         setPlaying(false);
+        setPreviewOpen(false);
         api.shareInfo(token)
             .then((result) => {
                 setInfo(result);
@@ -129,26 +134,25 @@ export default function SharePage() {
                 ) : (
                     <div className="mt-5">
                         {kind === 'image' && (
+                            <button type="button" className="block w-full cursor-zoom-in" aria-label="查看图片" onClick={() => setPreviewOpen(true)}>
                             <img
                                 src={url}
                                 alt={info.name}
                                 className="max-w-full max-h-[55vh] rounded-xl mx-auto"
                             />
+                            </button>
                         )}
+                        {['pdf', 'markdown', 'text', 'sheet', 'epub'].includes(kind) || info.name.toLowerCase().endsWith('.docx') ? (
+                            <Button className="w-full" onClick={() => setPreviewOpen(true)}><Eye className="size-4" /> 预览文件</Button>
+                        ) : null}
                         {kind === 'audio' && (
                             // eslint-disable-next-line jsx-a11y/media-has-caption
                             <audio src={url} controls className="w-full" />
                         )}
                         {kind === 'video' &&
-                            browserPlayable(info.name) &&
+                            videoPlaybackMode(info.name) &&
                             (playing ? (
-                                // eslint-disable-next-line jsx-a11y/media-has-caption
-                                <video
-                                    src={url}
-                                    controls
-                                    autoPlay
-                                    className="w-full max-h-[55vh] rounded-xl bg-black"
-                                />
+                                <VideoPreview url={url} name={info.name} downloadUrl={api.shareDownloadUrl(token, true)} />
                             ) : (
                                 <button
                                     className="relative w-full rounded-xl overflow-hidden bg-paper-2 cursor-pointer"
@@ -190,6 +194,19 @@ export default function SharePage() {
                     <Github className="size-3.5" /> 由 PocketDrive 分享
                 </a>
             </Card>
+            {unlocked && !isText && previewOpen && (
+                <PlayerProvider>
+                    <Preview
+                        key={token}
+                        entries={[{ name: info.name, size: info.size, mtime: info.mtime, dir: false }]}
+                        index={0}
+                        dirPath=""
+                        source={{ url, downloadUrl: api.shareDownloadUrl(token, true) }}
+                        onNavigate={() => {}}
+                        onClose={() => setPreviewOpen(false)}
+                    />
+                </PlayerProvider>
+            )}
         </div>
     );
 }

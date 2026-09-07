@@ -45,6 +45,17 @@ else
         say "已补写 aria2 RPC 密钥"
     fi
 fi
+if [ -f docker-compose.yml ] && grep -q 'p3terx/aria2-pro' docker-compose.yml; then
+    # Pull first: a missing/unpublished image must not stop the old deployment.
+    docker pull ghcr.io/lqlcj/pocketdrive-aria2:latest
+    say "迁移旧 aria2 镜像:停止服务以保存会话,并备份配置"
+    docker compose stop -t 60 pocketdrive aria2
+    BACKUP_DIR="$DIR/backup/aria2-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    cp -a config/aria2 "$BACKUP_DIR/aria2"
+    cp -a docker-compose.yml "$BACKUP_DIR/docker-compose.yml"
+    say "旧配置已备份至 $BACKUP_DIR"
+fi
 cat > docker-compose.yml <<EOF
 services:
     pocketdrive:
@@ -68,18 +79,12 @@ services:
         depends_on:
             - aria2
     aria2:
-        image: p3terx/aria2-pro
+        image: ghcr.io/lqlcj/pocketdrive-aria2:latest
         container_name: pocketdrive-aria2
         restart: unless-stopped
+        stop_grace_period: 60s
         environment:
             - RPC_SECRET=\${ARIA2_SECRET}
-            - LISTEN_PORT=6888
-            - MAX_CONCURRENT_DOWNLOADS=3
-            # 镜像默认让 aria2c 以 nobody(65534)运行,写不进 PocketDrive
-            # 以 root 建的目录;统一成 root 才能共享 /data
-            - PUID=0
-            - PGID=0
-            - UMASK_SET=022
         volumes:
             - ./data:/data
             - ./config/aria2:/config

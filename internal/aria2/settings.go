@@ -3,7 +3,7 @@ package aria2
 // 下载设置:网页化管理 aria2,存 SQLite,变更即时通过
 // changeGlobalOption 应用(全局项);seed-time / bt-tracker 属于
 // 任务级选项,在 addUri 时注入。DHT、IPv6 等是 aria2 启动项,
-// 由 aria2 侧配置(p3terx/aria2-pro 默认已开 DHT),不在此管理。
+// 由 aria2 侧配置(docker/aria2/aria2.conf 默认已开 DHT),不在此管理。
 
 import (
 	"context"
@@ -104,6 +104,9 @@ func (m *Manager) applyGlobals() {
 // ---- BT tracker 自动更新 ----
 
 func (m *Manager) trackers() string {
+	if custom := m.customTrackers(); custom.List != "" {
+		return custom.List
+	}
 	return m.getSetting(trackersKey)
 }
 
@@ -164,14 +167,21 @@ func (m *Manager) startTrackerLoop() {
 
 func (m *Manager) HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	s := m.Settings()
+	source := "default"
+	at := m.getSetting(trackersAtKey)
+	list := m.getSetting(trackersKey)
+	if custom := m.customTrackers(); custom.List != "" {
+		source, at, list = "custom", custom.UpdatedAt, custom.List
+	}
 	trackerCount := 0
-	if t := m.trackers(); t != "" {
-		trackerCount = strings.Count(t, ",") + 1
+	if list != "" {
+		trackerCount = strings.Count(list, ",") + 1
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"settings":         s,
 		"trackerCount":     trackerCount,
-		"trackerUpdatedAt": m.getSetting(trackersAtKey),
+		"trackerUpdatedAt": at,
+		"trackerSource":    source,
 	})
 }
 

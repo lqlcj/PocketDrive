@@ -106,6 +106,8 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	api.HandleFunc("GET /api/v1/downloads/settings", d.Aria2.HandleGetSettings)
 	api.HandleFunc("POST /api/v1/downloads/settings", d.Aria2.HandleSaveSettings)
 	api.HandleFunc("POST /api/v1/downloads/trackers/update", d.Aria2.HandleUpdateTrackers)
+	api.HandleFunc("POST /api/v1/downloads/trackers/import", d.Aria2.HandleImportTrackers)
+	api.HandleFunc("DELETE /api/v1/downloads/trackers/custom", d.Aria2.HandleResetTrackers)
 
 	api.HandleFunc("GET /api/v1/shares", d.Share.HandleList)
 	api.HandleFunc("POST /api/v1/shares", d.Share.HandleCreate)
@@ -141,7 +143,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 	mux.Handle("/api/v1/", d.Auth.Middleware(api))
 
 	// WebDAV: whole data dir + cloud mounts, Basic Auth (same admin account)
-	davHandler := d.Auth.BasicAuth(dav.Handler(d.Files.Root(), d.Cloud))
+	davHandler := d.Auth.BasicAuth(dav.Handler(d.Files.Root(), d.Cloud, d.Trash.Trash))
 	mux.Handle("/dav/", davHandler)
 	mux.Handle("/dav", davHandler)
 

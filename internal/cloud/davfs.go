@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log"
 	"mime"
 	"os"
 	"path"
@@ -25,14 +24,18 @@ type DavFS struct {
 
 // NewDavFSRoot uses the same capability root as the files service, so WebDAV
 // cannot follow a symlink outside the drive. The caller owns root's lifetime.
-func NewDavFSRoot(svc *Service, root *os.Root) *DavFS {
-	return &DavFS{svc: svc, local: rootFS{root}}
+func NewDavFSRoot(svc *Service, root *os.Root, trash ...func(string) error) *DavFS {
+	local := rootFS{root: root}
+	if len(trash) > 0 {
+		local.trash = trash[0]
+	}
+	return &DavFS{svc: svc, local: local}
 }
 
 var errPerm = errors.New("webdav: operation not supported on cloud storage")
 
 // split 解析 webdav 路径("/@R2/a/b" 等):挂载命中返回 (mount, rel)。
-func (d *DavFS) split(name string) (*S3Mount, string, bool) {
+func (d *DavFS) split(name string) (Mount, string, bool) {
 	p := strings.Trim(path.Clean("/"+name), "/")
 	if !IsMountPath(p) {
 		return nil, "", false
@@ -63,21 +66,15 @@ func (d *DavFS) Mkdir(ctx context.Context, name string, perm os.FileMode) error 
 	return d.local.Mkdir(ctx, name, perm)
 }
 
-// RemoveAll 是 WebDAV 侧唯一的删除入口。挂了同步类客户端的话,客户端
-// 单方面的"同步"也会走到这里,而且不进回收站——记一行日志,事后能查清
-// 到底是谁把文件删掉的。
+// RemoveAll recycles local data. Remote deletion is denied because these
+// mounts do not provide a recoverable recycle-bin contract.
 func (d *DavFS) RemoveAll(ctx context.Context, name string) error {
-	if m, rel, ok := d.split(name); ok {
-		if rel == "" {
-			return errPerm // 删挂载点 = 删策略,去网页设置里做
-		}
-		log.Printf("[删除] WebDAV 删除外部存储 %s", strings.Trim(path.Clean("/"+name), "/"))
-		return m.Delete(ctx, rel)
+	if _, _, ok := d.split(name); ok {
+		return os.ErrPermission
 	}
 	if isMountName(name) {
 		return os.ErrNotExist
 	}
-	log.Printf("[删除] WebDAV 删除 %s", strings.Trim(path.Clean("/"+name), "/"))
 	return d.local.RemoveAll(ctx, name)
 }
 
@@ -101,16 +98,16 @@ func (d *DavFS) Rename(ctx context.Context, oldName, newName string) error {
 
 // stat 查外部存储上的一条路径,能命中请求内缓存就一个网络请求都不发
 // (davcache.go 讲了为什么非缓存不可)。
-func (d *DavFS) stat(ctx context.Context, m *S3Mount, rel string) (Entry, error) {
+func (d *DavFS) stat(ctx context.Context, m Mount, rel string) (Entry, error) {
 	c := listCacheFrom(ctx)
-	if e, ok := c.get(m.Name, rel); ok {
+	if e, ok := c.get(m.MountName(), rel); ok {
 		return e, nil
 	}
 	e, err := m.Stat(ctx, rel)
 	if err != nil {
 		return Entry{}, err
 	}
-	c.put(m.Name, rel, e)
+	c.put(m.MountName(), rel, e)
 	return e, nil
 }
 
@@ -230,7 +227,7 @@ var extraTypes = map[string]string{
 	".m4b": "audio/mp4", ".aiff": "audio/aiff", ".dsf": "audio/x-dsf",
 	".mp4": "video/mp4", ".mkv": "video/x-matroska", ".webm": "video/webm",
 	".mov": "video/quicktime", ".avi": "video/x-msvideo", ".ts": "video/mp2t",
-	".flv": "video/x-flv", ".m4v": "video/x-m4v",
+	".flv": "video/x-flv", ".m4v": "video/x-m4v", ".mts": "video/mp2t", ".m2ts": "video/mp2t",
 	".lrc": "text/plain", ".cue": "text/plain", ".m3u": "audio/x-mpegurl",
 	".m3u8": "application/vnd.apple.mpegurl",
 }
@@ -276,7 +273,7 @@ func (f *rootFile) mountInfos() []fs.FileInfo {
 
 type s3DirFile struct {
 	ctx  context.Context
-	m    *S3Mount
+	m    Mount
 	rel  string
 	info os.FileInfo
 	read bool
@@ -299,7 +296,7 @@ func (f *s3DirFile) Readdir(count int) ([]fs.FileInfo, error) {
 	}
 	// walkFS 马上就要把这批结果丢掉、再逐个 Stat 回来。先整份存进请求
 	// 缓存,那批 Stat 就全在内存里解决了(davcache.go)。
-	listCacheFrom(f.ctx).putDir(f.m.Name, f.rel, entries)
+	listCacheFrom(f.ctx).putDir(f.m.MountName(), f.rel, entries)
 	out := make([]fs.FileInfo, len(entries))
 	for i, e := range entries {
 		out[i] = entryInfo{e}
@@ -319,7 +316,7 @@ func (f *s3DirFile) Readdir(count int) ([]fs.FileInfo, error) {
 // 一次回源都没有。
 type s3ReadFile struct {
 	ctx  context.Context
-	m    *S3Mount
+	m    Mount
 	rel  string
 	info os.FileInfo
 	obj  io.ReadSeekCloser // nil = 还没开
@@ -388,15 +385,16 @@ func (f *s3ReadFile) Stat() (os.FileInfo, error)         { return f.info, nil }
 // ---- S3 写文件:pipe 流式中转,Close 时等待上传完成 ----
 
 type s3WriteFile struct {
+	ctx  context.Context
 	rel  string
 	pw   *io.PipeWriter
 	done chan error
 	n    int64
 }
 
-func newS3WriteFile(ctx context.Context, m *S3Mount, rel string) *s3WriteFile {
+func newS3WriteFile(ctx context.Context, m Mount, rel string) *s3WriteFile {
 	pr, pw := io.Pipe()
-	f := &s3WriteFile{rel: rel, pw: pw, done: make(chan error, 1)}
+	f := &s3WriteFile{ctx: ctx, rel: rel, pw: pw, done: make(chan error, 1)}
 	go func() {
 		err := m.Put(ctx, rel, pr, -1)
 		// 上传失败时让写端尽快报错,而不是一直灌 pipe
@@ -413,6 +411,11 @@ func (f *s3WriteFile) Write(p []byte) (int, error) {
 }
 
 func (f *s3WriteFile) Close() error {
+	if err := uploadError(f.ctx); err != nil {
+		f.pw.CloseWithError(err)
+		<-f.done
+		return err
+	}
 	f.pw.Close()
 	return <-f.done
 }

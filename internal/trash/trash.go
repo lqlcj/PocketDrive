@@ -20,6 +20,7 @@ import (
 	"pocketdrive/internal/db"
 	"pocketdrive/internal/files"
 	"pocketdrive/internal/httpx"
+	"pocketdrive/internal/safefs"
 )
 
 const (
@@ -75,6 +76,8 @@ func randKey() string {
 
 // Trash moves a path into the recycle bin.
 func (s *Service) Trash(p string) error {
+	safefs.Mutation.Lock()
+	defer safefs.Mutation.Unlock()
 	p = files.CleanPath(p)
 	if p == "" {
 		return errors.New("不能删除根目录")
@@ -87,7 +90,7 @@ func (s *Service) Trash(p string) error {
 		return err
 	}
 	key := randKey()
-	if err := s.files.Root().Rename(p, path.Join(trashDir, key)); err != nil {
+	if err := safefs.RenameLocked(s.files.Root(), p, path.Join(trashDir, key)); err != nil {
 		return err
 	}
 	item := db.TrashItem{
@@ -100,7 +103,7 @@ func (s *Service) Trash(p string) error {
 	}
 	if err := s.db.Create(&item).Error; err != nil {
 		// DB 失败则把文件挪回去,避免"消失"
-		_ = s.files.Root().Rename(path.Join(trashDir, key), p)
+		_ = safefs.RenameLocked(s.files.Root(), path.Join(trashDir, key), p)
 		return err
 	}
 	log.Printf("[删除] %s → 回收站(%s)", p, key)
@@ -108,6 +111,8 @@ func (s *Service) Trash(p string) error {
 }
 
 func (s *Service) restore(item *db.TrashItem) error {
+	safefs.Mutation.Lock()
+	defer safefs.Mutation.Unlock()
 	dest := item.OrigPath
 	if dir := path.Dir(dest); dir != "." {
 		if err := s.files.Root().MkdirAll(dir, 0o755); err != nil {
@@ -117,7 +122,7 @@ func (s *Service) restore(item *db.TrashItem) error {
 	if _, err := s.files.Root().Stat(dest); err == nil {
 		return errors.New("原位置已有同名文件,请先处理后再还原")
 	}
-	if err := s.files.Root().Rename(path.Join(trashDir, item.TrashKey), dest); err != nil {
+	if err := safefs.RenameLocked(s.files.Root(), path.Join(trashDir, item.TrashKey), dest); err != nil {
 		return err
 	}
 	return s.db.Delete(&db.TrashItem{}, item.ID).Error

@@ -7,7 +7,7 @@ export class ApiError extends Error {
     }
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+async function req<T>(path: string, init?: RequestInit, preserveUtf8 = false): Promise<T> {
     const resp = await fetch(path, init);
     if (resp.status === 401) {
         window.dispatchEvent(new Event('pocketdrive:unauth'));
@@ -15,7 +15,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const ct = resp.headers.get('Content-Type') ?? '';
     const isJSON = ct.includes('application/json');
-    const body = isJSON ? await resp.json() : await resp.text();
+    const body = isJSON ? await resp.json() : preserveUtf8 && resp.ok
+        ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await resp.arrayBuffer())
+        : await resp.text();
     if (!resp.ok) {
         const msg = isJSON && body.error ? body.error : `请求失败 (${resp.status})`;
         throw new ApiError(resp.status, msg);
@@ -29,6 +31,13 @@ function post<T>(path: string, data: unknown): Promise<T> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     });
+}
+
+export interface DownloadSettingsResponse {
+    settings: DownloadSettings;
+    trackerCount: number;
+    trackerUpdatedAt: string;
+    trackerSource: 'default' | 'custom';
 }
 
 export interface FileEntry {
@@ -170,6 +179,7 @@ export interface StoragePolicy {
     endpoint: string;
     region: string;
     bucket: string;
+    username: string;
     accessKey: string;
     basePath: string;
     connected: boolean;
@@ -182,11 +192,14 @@ export interface StoragePolicy {
 }
 
 export interface StoragePolicyInput {
+    type?: 's3' | 'webdav';
     id?: number;
     name: string;
     endpoint: string;
     region: string;
     bucket: string;
+    username?: string;
+    password?: string;
     accessKey: string;
     secretKey: string;
     basePath: string;
@@ -226,8 +239,8 @@ export const api = {
     downloadUrl: (path: string, dl = false) =>
         `/api/v1/files/download?path=${encodeURIComponent(path)}${dl ? '&dl=1' : ''}`,
     thumbUrl: (path: string) => `/api/v1/files/thumb?path=${encodeURIComponent(path)}`,
-    content: (path: string) =>
-        req<string>(`/api/v1/files/content?path=${encodeURIComponent(path)}`),
+    content: (path: string, preserveUtf8 = false) =>
+        req<string>(`/api/v1/files/content?path=${encodeURIComponent(path)}`, undefined, preserveUtf8),
     rename: (path: string, newName: string) =>
         post<{ ok: boolean }>('/api/v1/files/rename', { path, newName }),
     move: (path: string, dest: string) =>
@@ -288,11 +301,15 @@ export const api = {
         post<{ ok: boolean }>('/api/v1/files/upload/complete', { id, path, chunks }),
 
     downloadSettings: () =>
-        req<{
-            settings: DownloadSettings;
-            trackerCount: number;
-            trackerUpdatedAt: string;
-        }>('/api/v1/downloads/settings'),
+        req<DownloadSettingsResponse>('/api/v1/downloads/settings'),
+    importTrackers: (file: File) =>
+        req<DownloadSettingsResponse>('/api/v1/downloads/trackers/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+            body: file,
+        }),
+    resetTrackers: () =>
+        req<DownloadSettingsResponse>('/api/v1/downloads/trackers/custom', { method: 'DELETE' }),
     saveDownloadSettings: (s: DownloadSettings) =>
         post<{ ok: boolean }>('/api/v1/downloads/settings', s),
     updateTrackers: () =>

@@ -108,7 +108,8 @@ func (s *Service) mountOf(us *db.UploadSession) (*cloud.S3Mount, string, bool) {
 	if !ok || rel == "" {
 		return nil, "", false
 	}
-	return m, rel, true
+	s3, ok := m.(*cloud.S3Mount)
+	return s3, rel, ok
 }
 
 // uploadedParts 返回已经传成功的分片序号(从 0 开始,升序)。
@@ -286,17 +287,23 @@ func (s *Service) HandleUploadInit(w http.ResponseWriter, r *http.Request) {
 		if additional < 0 {
 			additional = 0
 		}
-		reserved := s.cloudReservations(m.Name, p, "", additional)
-		if err := s.cloud.CheckQuota(m.Name, reserved); err != nil {
+		reserved := s.cloudReservations(m.MountName(), p, "", additional)
+		if err := s.cloud.CheckQuota(m.MountName(), reserved); err != nil {
 			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 			return
 		}
-		uploadID, err := m.MultipartInit(r.Context(), rel)
-		if err != nil {
-			httpx.Err(w, http.StatusBadGateway, "外部存储初始化分片失败: "+err.Error())
+		us.Reserved = additional
+		if s3, ok := m.(*cloud.S3Mount); ok {
+			uploadID, err := s3.MultipartInit(r.Context(), rel)
+			if err != nil {
+				httpx.Err(w, http.StatusBadGateway, "外部存储初始化分片失败: "+err.Error())
+				return
+			}
+			us.ID, us.S3UploadID = "s3"+randHex(), uploadID
+		} else if err := s.createLocalSession(&us); err != nil {
+			httpx.Err(w, http.StatusInsufficientStorage, err.Error())
 			return
 		}
-		us.ID, us.S3UploadID, us.Reserved = "s3"+randHex(), uploadID, additional
 	} else {
 		// 本机:总大小已知,动手之前就拦下装不下的;分片暂存在 tmpDir
 		// (DB 同级,不在网盘里),complete 落盘时才真正占网盘配额
@@ -512,13 +519,19 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 		opened = append(opened, part)
 		readers = append(readers, part)
 	}
-	_, _, err := s.atomicWrite(p, io.MultiReader(readers...), us.Size, us.ID)
+	var err error
+	if cloud.IsMountPath(p) {
+		err = s.completeRemoteUpload(r.Context(), us, io.MultiReader(readers...))
+	} else {
+		_, _, err = s.atomicWrite(p, io.MultiReader(readers...), us.Size, us.ID)
+	}
 	for _, f := range opened {
 		f.Close()
 	}
 	if err != nil {
 		status := http.StatusInternalServerError
-		if isLocalCapacityError(err) {
+		var quotaErr *cloud.QuotaError
+		if isLocalCapacityError(err) || errors.As(err, &quotaErr) {
 			status = http.StatusInsufficientStorage
 		}
 		httpx.Err(w, status, "拼接分片失败: "+err.Error())
@@ -526,4 +539,26 @@ func (s *Service) HandleUploadComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.finishLocalSession(us)
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) completeRemoteUpload(ctx context.Context, us *db.UploadSession, body io.Reader) error {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	m, rel, ok := s.cloud.Resolve(us.Path)
+	if !ok || rel == "" {
+		return errors.New("外部存储不存在或已卸载")
+	}
+	var oldSize int64
+	if e, err := m.Stat(ctx, rel); err == nil && !e.Dir {
+		oldSize = e.Size
+	}
+	reserved := s.cloudReservations(m.MountName(), us.Path, us.ID, max(0, us.Size-oldSize))
+	if err := s.cloud.CheckQuota(m.MountName(), reserved); err != nil {
+		return err
+	}
+	if err := m.Put(ctx, rel, body, us.Size); err != nil {
+		return err
+	}
+	s.cloud.AddUsage(m.MountName(), us.Size-oldSize)
+	return nil
 }

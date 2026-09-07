@@ -39,7 +39,7 @@ type Service struct {
 	db *gorm.DB
 
 	mu     sync.RWMutex
-	mounts map[string]*S3Mount // name -> mount
+	mounts map[string]Mount // name -> mount
 
 	uMu   sync.Mutex
 	usage map[string]usageEntry // name -> 用量缓存
@@ -51,7 +51,7 @@ type Service struct {
 func New(gdb *gorm.DB) *Service {
 	s := &Service{
 		db:     gdb,
-		mounts: make(map[string]*S3Mount),
+		mounts: make(map[string]Mount),
 		usage:  make(map[string]usageEntry),
 	}
 	s.davDirect.Store(s.loadSettings().DavDirect)
@@ -72,9 +72,9 @@ func (s *Service) policy(name string) (*db.StoragePolicy, error) {
 func (s *Service) reload() {
 	var policies []db.StoragePolicy
 	s.db.Find(&policies)
-	next := make(map[string]*S3Mount, len(policies))
+	next := make(map[string]Mount, len(policies))
 	for i := range policies {
-		m, err := newS3Mount(&policies[i])
+		m, err := newMount(&policies[i])
 		if err != nil {
 			continue // 配置损坏的策略跳过,不拖垮其他挂载
 		}
@@ -98,7 +98,7 @@ func (s *Service) Names() []string {
 
 // Resolve 判断相对路径是否落在某个挂载内:"@R2/a/b" → (mount, "a/b", true)。
 // "@R2" 本身返回 rel=""。不是挂载路径返回 ok=false。
-func (s *Service) Resolve(p string) (*S3Mount, string, bool) {
+func (s *Service) Resolve(p string) (Mount, string, bool) {
 	if !strings.HasPrefix(p, MountPrefix) {
 		return nil, "", false
 	}
@@ -126,6 +126,7 @@ type policyView struct {
 	Region    string `json:"region"`
 	Bucket    string `json:"bucket"`
 	AccessKey string `json:"accessKey"`
+	Username  string `json:"username"`
 	BasePath  string `json:"basePath"`
 	Connected bool   `json:"connected"`
 	// 容量:上限与当前用量(用量是缓存值,首次访问时后台统计)
@@ -150,7 +151,7 @@ func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
 		v := policyView{
 			ID: p.ID, Name: p.Name, Type: p.Type, Endpoint: p.Endpoint,
 			Region: p.Region, Bucket: p.Bucket, AccessKey: p.AccessKey,
-			BasePath: p.BasePath, Connected: connected[p.Name],
+			BasePath: p.BasePath, Username: p.Username, Connected: connected[p.Name],
 			QuotaBytes: p.QuotaBytes,
 		}
 		if v.Connected {
@@ -164,6 +165,7 @@ func (s *Service) HandleList(w http.ResponseWriter, r *http.Request) {
 
 type policyReq struct {
 	ID        uint   `json:"id"`
+	Type      string `json:"type"`
 	Name      string `json:"name"`
 	Endpoint  string `json:"endpoint"`
 	Region    string `json:"region"`
@@ -171,6 +173,8 @@ type policyReq struct {
 	AccessKey string `json:"accessKey"`
 	SecretKey string `json:"secretKey"`
 	BasePath  string `json:"basePath"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
 	// QuotaGB 是前端填的容量上限(GB),0 或留空 = 不限
 	QuotaGB float64 `json:"quotaGB"`
 }
@@ -183,10 +187,19 @@ func (req *policyReq) normalize() error {
 	req.AccessKey = strings.TrimSpace(req.AccessKey)
 	req.SecretKey = strings.TrimSpace(req.SecretKey)
 	req.BasePath = strings.Trim(strings.ReplaceAll(req.BasePath, "\\", "/"), "/ ")
+	if req.Type == "" {
+		req.Type = "s3"
+	}
+	if req.Type != "s3" && req.Type != "webdav" {
+		return errors.New("不支持的存储类型")
+	}
 	if !nameRe.MatchString(req.Name) {
 		return errors.New("挂载名称只能是中文/字母/数字/下划线/横线,最长 32 字符")
 	}
-	if req.Endpoint == "" || req.Bucket == "" || req.AccessKey == "" {
+	if req.Type == "webdav" && (req.Endpoint == "" || req.Username == "") {
+		return errors.New("WebDAV 地址和用户名不能为空")
+	}
+	if req.Endpoint == "" || (req.Type == "s3" && (req.Bucket == "" || req.AccessKey == "")) {
 		return errors.New("Endpoint、Bucket、AccessKey 均不能为空")
 	}
 	if !strings.HasPrefix(req.Endpoint, "http://") && !strings.HasPrefix(req.Endpoint, "https://") {
@@ -218,8 +231,12 @@ func (s *Service) HandleSave(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusNotFound, "策略不存在")
 			return
 		}
-	} else if req.SecretKey == "" {
+	} else if req.Type == "s3" && req.SecretKey == "" {
 		httpx.Err(w, http.StatusBadRequest, "SecretKey 不能为空")
+		return
+	}
+	if req.ID > 0 && p.Type != req.Type && !(p.Type == "" && req.Type == "s3") {
+		httpx.Err(w, http.StatusBadRequest, "已有挂载不能更改存储类型，请创建新挂载")
 		return
 	}
 	// 名称冲突(排除自身)
@@ -229,15 +246,23 @@ func (s *Service) HandleSave(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "已存在同名挂载")
 		return
 	}
-	p.Name, p.Type = req.Name, "s3"
+	p.Name, p.Type = req.Name, req.Type
 	p.Endpoint, p.Region, p.Bucket = req.Endpoint, req.Region, req.Bucket
 	p.AccessKey, p.BasePath = req.AccessKey, req.BasePath
+	p.Username = req.Username
+	if req.Password != "" {
+		p.Password = req.Password
+	}
 	p.QuotaBytes = int64(req.QuotaGB * float64(1<<30))
 	if p.QuotaBytes < 0 {
 		p.QuotaBytes = 0
 	}
 	if req.SecretKey != "" {
 		p.SecretKey = req.SecretKey
+	}
+	if _, err := newMount(&p); err != nil {
+		httpx.Err(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if err := s.db.Save(&p).Error; err != nil {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
@@ -271,7 +296,7 @@ func (s *Service) HandleTest(w http.ResponseWriter, r *http.Request) {
 	p := db.StoragePolicy{
 		Endpoint: req.Endpoint, Region: req.Region, Bucket: req.Bucket,
 		AccessKey: req.AccessKey, SecretKey: req.SecretKey, BasePath: req.BasePath,
-		Name: req.Name,
+		Name: req.Name, Type: req.Type, Username: req.Username, Password: req.Password,
 	}
 	if req.ID > 0 {
 		var saved db.StoragePolicy
@@ -282,6 +307,9 @@ func (s *Service) HandleTest(w http.ResponseWriter, r *http.Request) {
 		if p.SecretKey == "" {
 			p.SecretKey = saved.SecretKey
 		}
+		if p.Password == "" && p.Type == saved.Type {
+			p.Password = saved.Password
+		}
 		if p.Endpoint == "" {
 			p = saved
 		}
@@ -289,14 +317,14 @@ func (s *Service) HandleTest(w http.ResponseWriter, r *http.Request) {
 	if p.Name == "" {
 		p.Name = "test"
 	}
-	req2 := policyReq{Name: p.Name, Endpoint: p.Endpoint, Region: p.Region,
+	req2 := policyReq{Name: p.Name, Type: p.Type, Username: p.Username, Endpoint: p.Endpoint, Region: p.Region,
 		Bucket: p.Bucket, AccessKey: p.AccessKey, SecretKey: p.SecretKey, BasePath: p.BasePath}
 	if err := req2.normalize(); err != nil {
 		httpx.Err(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	p.Endpoint, p.Region, p.BasePath = req2.Endpoint, req2.Region, req2.BasePath
-	m, err := newS3Mount(&p)
+	m, err := newMount(&p)
 	if err != nil {
 		httpx.Err(w, http.StatusBadRequest, "配置无效: "+err.Error())
 		return

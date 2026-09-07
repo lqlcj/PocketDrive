@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import './markdown.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -207,95 +208,30 @@ body {
     }
 }
 
-/* markdown 预览排版 */
-.prose-island {
-    line-height: 1.75;
-    word-break: break-word;
-}
-.prose-island h1,
-.prose-island h2,
-.prose-island h3 {
-    font-weight: 800;
-    margin: 1em 0 0.4em;
-}
-.prose-island h1 {
-    font-size: 1.5em;
-    border-bottom: 1px solid var(--line);
-    padding-bottom: 0.3em;
-}
-.prose-island h2 {
-    font-size: 1.25em;
-}
-.prose-island p {
-    margin: 0.5em 0;
-}
-.prose-island ul,
-.prose-island ol {
-    padding-left: 1.4em;
-    margin: 0.5em 0;
-}
-.prose-island ul {
-    list-style: disc;
-}
-.prose-island ol {
-    list-style: decimal;
-}
-.prose-island code {
-    background: var(--paper-2);
-    border-radius: 6px;
-    padding: 0.1em 0.35em;
-    font-size: 0.9em;
-}
-.prose-island pre {
-    background: var(--paper-2);
-    border-radius: 12px;
-    padding: 12px;
-    overflow: auto;
-    margin: 0.6em 0;
-}
-.prose-island pre code {
-    background: none;
-    padding: 0;
-}
-.prose-island blockquote {
-    border-left: 4px solid var(--leaf);
-    padding-left: 1em;
-    color: var(--ink-soft);
-    margin: 0.6em 0;
-}
-.prose-island a {
-    color: var(--leaf-dark);
-    text-decoration: underline;
-}
-.prose-island table {
-    border-collapse: collapse;
-    margin: 0.6em 0;
-}
-.prose-island th,
-.prose-island td {
-    border: 1px solid var(--line);
-    padding: 4px 10px;
-}
-.prose-island img {
-    max-width: 100%;
-    border-radius: 10px;
-}
-
 /* Office 预览容器 */
 .office-docx {
-    background: #fff;
-    border-radius: 10px;
-    overflow: auto;
-    max-height: 65vh;
+    min-width: 0;
 }
 .office-docx .docx-wrapper {
-    background: transparent;
-    padding: 16px;
+    background: var(--paper-2);
+    padding: 12px;
+    border-radius: 8px;
 }
 .office-docx .docx-wrapper > section.docx {
-    box-shadow: 0 1px 4px rgb(0 0 0 / 0.12);
-    margin-bottom: 16px;
-    width: auto !important;
-    padding: 24px !important;
-    min-height: auto !important;
+    flex-shrink: 0;
+    color: #222;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.08);
+    margin-bottom: 24px;
 }
+
+.pd-sheet-preview { min-width: 0; }
+.pd-sheet-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding-block: 0.75rem; }
+.pd-sheet-toolbar select { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.6rem; background: var(--paper); color: var(--ink); }
+.pd-sheet-grid { max-height: 55vh; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; border: 1px solid var(--line); }
+.pd-sheet-grid table { border-collapse: separate; border-spacing: 0; font-size: 0.8125rem; width: max-content; min-width: 100%; }
+.pd-sheet-grid th, .pd-sheet-grid td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 0.5rem 0.75rem; min-width: 7rem; max-width: 24rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pd-sheet-grid th { background: var(--paper-2); color: var(--ink-soft); font-weight: 500; }
+.pd-sheet-grid thead th { position: sticky; top: 0; z-index: 2; }
+.pd-sheet-grid tr > th:first-child { position: sticky; left: 0; min-width: 3.5rem; z-index: 1; }
+.pd-sheet-grid thead th:first-child { z-index: 3; }
+.pd-sheet-grid tbody tr:hover td { background: var(--leaf-soft); }
