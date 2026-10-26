@@ -1,4 +1,4 @@
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk add --no-cache aria2 ca-certificates
 COPY docker/aria2/aria2.conf /etc/aria2/aria2.conf
 COPY docker/aria2/entrypoint.sh /usr/local/bin/aria2-entrypoint
