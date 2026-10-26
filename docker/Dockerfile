@@ -1,7 +1,7 @@
 # 多阶段构建:前端 → Go 单二进制 → 运行镜像
 #
 # 镜像里只带 ffmpeg(Alpine 官方包);aria2 跑在自己的容器里。
-FROM --platform=$BUILDPLATFORM node:24-alpine AS webbuild
+FROM --platform=$BUILDPLATFORM node:26-alpine AS webbuild
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
