@@ -44,7 +44,7 @@ jobs:
                   npm --prefix web ci --ignore-scripts
                   npm --prefix web audit --audit-level=high
                   npm --prefix web run build
-            - uses: actions/setup-go@v5
+            - uses: actions/setup-go@v7
               with:
                   go-version-file: go.mod
                   cache: true
