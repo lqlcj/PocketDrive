@@ -19,7 +19,7 @@ COPY --from=webbuild /src/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/pocketdrive ./cmd/pocketdrive
 
-FROM alpine:3.22
+FROM alpine:3.24
 # ffmpeg 用于缩略图抽帧,升级随主镜像进行。
 RUN apk add --no-cache ca-certificates tzdata ffmpeg
 COPY --from=gobuild /out/pocketdrive /usr/local/bin/pocketdrive
