@@ -4,6 +4,8 @@
 package thumbs
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -27,10 +29,12 @@ import (
 )
 
 const (
-	maxSide     = 320
-	maxImageMB  = 30
-	maxPixels   = 40_000_000 // 40MP 解码内存保护
-	ffmpegOffet = "1"        // 视频抽第 1 秒的帧
+	maxSide          = 320
+	maxImageMB       = 30
+	maxPixels        = 40_000_000 // 40MP 解码内存保护
+	ffmpegOffet      = "1"        // 视频抽第 1 秒的帧
+	thumbnailTimeout = 30 * time.Second
+	maxFFmpegOutput  = 16 << 10
 )
 
 var imageExts = map[string]bool{
@@ -95,10 +99,30 @@ func (s *Service) Serve(w http.ResponseWriter, r *http.Request, p string) {
 	key := cacheKey(p, fi.Size(), fi.ModTime())
 	cachePath := filepath.Join(s.cacheDir, key+".jpg")
 	if _, err := os.Stat(cachePath); err != nil {
-		s.sem <- struct{}{}
-		err = s.generate(p, fi.Size(), cachePath)
-		<-s.sem
+		ctx, cancel := context.WithTimeout(r.Context(), thumbnailTimeout)
+		defer cancel()
+		select {
+		case s.sem <- struct{}{}:
+		case <-ctx.Done():
+			httpx.Err(w, http.StatusRequestTimeout, "缩略图请求已取消或超时")
+			return
+		}
+		err = func() error {
+			defer func() { <-s.sem }()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			// A previous request may have filled the cache while we waited.
+			if _, err := os.Stat(cachePath); err == nil {
+				return nil
+			}
+			return s.generate(ctx, p, fi.Size(), cachePath)
+		}()
 		if err != nil {
+			if ctx.Err() != nil {
+				httpx.Err(w, http.StatusRequestTimeout, "缩略图请求已取消或超时")
+				return
+			}
 			httpx.Err(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -112,13 +136,13 @@ func cacheKey(p string, size int64, mtime time.Time) string {
 	return hex.EncodeToString(h[:8])
 }
 
-func (s *Service) generate(p string, size int64, cachePath string) error {
+func (s *Service) generate(ctx context.Context, p string, size int64, cachePath string) error {
 	ext := strings.ToLower(filepath.Ext(p))
 	switch {
 	case imageExts[ext]:
 		return s.generateImage(p, size, cachePath)
 	case videoExts[ext]:
-		return s.generateVideo(p, cachePath)
+		return s.generateVideo(ctx, p, cachePath)
 	}
 	return errors.New("此类型不支持缩略图")
 }
@@ -191,21 +215,82 @@ func writeJPEG(img image.Image, cachePath string) error {
 	return os.Rename(tmp, cachePath)
 }
 
-func (s *Service) generateVideo(p, cachePath string) error {
+func (s *Service) generateVideo(ctx context.Context, p, cachePath string) error {
 	ff := s.ffmpeg()
 	if ff == "" {
 		return errors.New("未安装 ffmpeg,无法生成视频封面")
 	}
-	abs := filepath.Join(s.files.DataDir, filepath.FromSlash(p))
-	tmp := cachePath + ".tmp.jpg"
-	// exec 直调不经 shell;-ss 在 -i 前是快速 seek
-	cmd := exec.Command(ff, "-y", "-loglevel", "error",
-		"-ss", ffmpegOffet, "-i", abs,
-		"-frames:v", "1", "-vf", fmt.Sprintf("scale=%d:-2", maxSide),
-		tmp)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("ffmpeg 抽帧失败: %s", strings.TrimSpace(string(out)))
+	// Pass the file already opened under os.Root, rather than letting ffmpeg
+	// reopen a path that could be swapped for an escaping symlink.
+	input, err := s.files.Root().Open(p)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	info, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("视频必须是普通文件")
+	}
+	output, err := os.CreateTemp(s.cacheDir, ".pd-thumb-*.jpg")
+	if err != nil {
+		return err
+	}
+	tmp := output.Name()
+	defer os.Remove(tmp)
+	if err := output.Close(); err != nil {
+		return err
+	}
+	if err := runFFmpeg(ctx, ff, input, videoArgs(tmp)...); err != nil {
+		return err
+	}
+	if info, err := os.Stat(tmp); err != nil {
+		return err
+	} else if info.Size() == 0 {
+		return errors.New("视频没有可提取的画面")
 	}
 	return os.Rename(tmp, cachePath)
+}
+
+func videoArgs(target string) []string {
+	// Local media only: do not auto-detect playlists that can fetch network
+	// URLs or follow references into other local files. Unlike pipe:, fd:
+	// preserves seeking for MP4 files with metadata at the end of the file.
+	return []string{"-y", "-nostdin", "-loglevel", "error",
+		"-protocol_whitelist", "fd",
+		"-format_whitelist", "mov,matroska,webm,avi,flv,mpegts,m4v",
+		"-threads", "1", "-ss", ffmpegOffet, "-i", "fd:",
+		"-frames:v", "1", "-vf", fmt.Sprintf("scale=%d:-2", maxSide),
+		"-threads", "1", target}
+}
+
+type limitedOutput struct {
+	buffer bytes.Buffer
+}
+
+func (b *limitedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	if remaining := maxFFmpegOutput - b.buffer.Len(); remaining > 0 {
+		_, _ = b.buffer.Write(p[:min(n, remaining)])
+	}
+	return n, nil
+}
+
+func runFFmpeg(ctx context.Context, ff string, input *os.File, args ...string) error {
+	cmd := exec.CommandContext(ctx, ff, args...)
+	cmd.WaitDelay = time.Second
+	if input != nil {
+		cmd.Stdin = input
+	}
+	var output limitedOutput
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("ffmpeg 抽帧失败: %w: %s", err, strings.TrimSpace(output.buffer.String()))
+	}
+	return ctx.Err()
 }

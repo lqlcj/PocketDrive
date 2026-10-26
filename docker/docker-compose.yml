@@ -28,6 +28,8 @@ services:
             - POCKETDRIVE_ADMIN_USER=${POCKETDRIVE_ADMIN_USER:-admin}
             # 留空则首次启动随机生成并打印在容器日志里
             - POCKETDRIVE_ADMIN_PASSWORD=${POCKETDRIVE_ADMIN_PASSWORD:-}
+            # HTTPS 反向代理部署时设为 true；纯 HTTP 本机访问保持 false。
+            - POCKETDRIVE_SECURE_COOKIES=${POCKETDRIVE_SECURE_COOKIES:-false}
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
             - POCKETDRIVE_ARIA2_SECRET=${ARIA2_SECRET:?请设置随机的 ARIA2_SECRET}
             # aria2 进程眼里的数据目录。两个容器必须挂成同一个路径,

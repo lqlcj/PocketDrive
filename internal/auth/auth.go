@@ -239,34 +239,47 @@ func randPassword(n int) string {
 // Check verifies username/password against the stored bcrypt hash,
 // with a digest cache so repeated WebDAV requests skip bcrypt.
 func (s *Service) Check(user, pass string) bool {
-	if user != s.User() {
-		return false
-	}
+	_, ok := s.checkCredentials(user, pass)
+	return ok
+}
+
+// Return the credential generation that was actually checked. A login must
+// never exchange an old password check for a token from a newer generation.
+func (s *Service) checkCredentials(user, pass string) (int64, bool) {
 	key := sha256.Sum256([]byte(user + "\x00" + pass))
 	s.mu.Lock()
+	if user != s.user {
+		s.mu.Unlock()
+		return 0, false
+	}
+	version := s.tokenVersion
 	_, cached := s.passCache[key]
 	s.mu.Unlock()
 	if cached {
-		return true
+		return version, true
 	}
 	h, err := s.getSetting("admin_hash")
 	if err != nil || h == "" {
-		return false
+		return 0, false
 	}
 	if bcrypt.CompareHashAndPassword([]byte(h), []byte(pass)) != nil {
-		return false
+		return 0, false
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if version != s.tokenVersion || user != s.user {
+		return 0, false
+	}
 	s.passCache[key] = struct{}{}
-	s.mu.Unlock()
-	return true
+	return version, true
 }
 
 func (s *Service) ChangePassword(oldPass, newPass string) error {
 	if len(newPass) < 6 {
 		return errors.New("新密码至少 6 位")
 	}
-	if !s.Check(s.User(), oldPass) {
+	version, ok := s.checkCredentials(s.User(), oldPass)
+	if !ok {
 		return errors.New("旧密码不正确")
 	}
 	hb, err := bcrypt.GenerateFromPassword([]byte(newPass), bcrypt.DefaultCost)
@@ -274,30 +287,30 @@ func (s *Service) ChangePassword(oldPass, newPass string) error {
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if version != s.tokenVersion {
+		return errors.New("凭据已变更,请重新登录")
+	}
 	nextVersion := s.tokenVersion + 1
-	s.mu.Unlock()
-	// Persist invalidation first. If the password write fails, existing
-	// sessions are still revoked rather than becoming valid again after restart.
-	if err := s.setSetting("token_version", fmt.Sprintf("%d", nextVersion)); err != nil {
+	// Commit the hash and revocation together, then publish the same generation
+	// in memory while credential checks and concurrent rotations are excluded.
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&db.Setting{Key: "admin_hash", Value: string(hb)}).Error; err != nil {
+			return err
+		}
+		return tx.Save(&db.Setting{Key: "token_version", Value: fmt.Sprintf("%d", nextVersion)}).Error
+	}); err != nil {
 		return err
 	}
-	if err := s.setSetting("admin_hash", string(hb)); err != nil {
-		return err
-	}
-	s.mu.Lock()
 	s.passCache = make(map[[32]byte]struct{})
 	s.tokenVersion = nextVersion
-	s.mu.Unlock()
 	return nil
 }
 
-func (s *Service) issueToken() (string, time.Time, error) {
+func (s *Service) issueToken(user string, version int64) (string, time.Time, error) {
 	exp := time.Now().Add(tokenTTL)
-	s.mu.Lock()
-	version := s.tokenVersion
-	s.mu.Unlock()
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": s.User(),
+		"sub": user,
 		"exp": exp.Unix(),
 		"ver": version,
 	})
@@ -307,23 +320,19 @@ func (s *Service) issueToken() (string, time.Time, error) {
 
 func (s *Service) verifyToken(tok string) bool {
 	t, err := jwt.Parse(tok, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
-		}
 		return s.secret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	if err != nil || !t.Valid {
 		return false
 	}
 	claims, ok := t.Claims.(jwt.MapClaims)
-	if !ok || claims["sub"] != s.User() {
+	if !ok {
 		return false
 	}
 	ver, ok := claims["ver"].(float64)
 	s.mu.Lock()
-	currentVersion := s.tokenVersion
-	s.mu.Unlock()
-	return ok && int64(ver) == currentVersion
+	defer s.mu.Unlock()
+	return ok && claims["sub"] == s.user && ver == float64(s.tokenVersion)
 }
 
 // ---- rate limiting ----
@@ -454,13 +463,14 @@ func (s *Service) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if !s.Check(req.Username, req.Password) {
+	version, valid := s.checkCredentials(req.Username, req.Password)
+	if !valid {
 		s.fail(ip)
 		httpx.Err(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 	s.succeed(ip)
-	tok, exp, err := s.issueToken()
+	tok, exp, err := s.issueToken(req.Username, version)
 	if err != nil {
 		httpx.Err(w, http.StatusInternalServerError, err.Error())
 		return
@@ -471,6 +481,7 @@ func (s *Service) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  exp,
 		HttpOnly: true,
+		Secure:   httpx.CookieSecure(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
@@ -483,6 +494,7 @@ func (s *Service) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   httpx.CookieSecure(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -509,14 +521,10 @@ func (s *Service) HandleProfile(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusBadRequest, "用户名 2-32 字符,不能含冒号和空白")
 			return
 		}
-		if err := s.setSetting("admin_user", u); err != nil {
+		if err := s.changeUsername(u); err != nil {
 			httpx.Err(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.mu.Lock()
-		s.user = u
-		s.passCache = make(map[[32]byte]struct{})
-		s.mu.Unlock()
 	}
 	if req.Avatar != "" {
 		if len(req.Avatar) > 16 {
@@ -529,6 +537,27 @@ func (s *Service) HandleProfile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "user": s.User(), "avatar": s.Avatar(), "hasAvatar": s.HasAvatar(), "avatarVersion": s.AvatarVersion()})
+}
+
+func (s *Service) changeUsername(user string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if user == s.user {
+		return nil
+	}
+	nextVersion := s.tokenVersion + 1
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&db.Setting{Key: "admin_user", Value: user}).Error; err != nil {
+			return err
+		}
+		return tx.Save(&db.Setting{Key: "token_version", Value: fmt.Sprintf("%d", nextVersion)}).Error
+	}); err != nil {
+		return err
+	}
+	s.user = user
+	s.tokenVersion = nextVersion
+	s.passCache = make(map[[32]byte]struct{})
+	return nil
 }
 
 func (s *Service) HandleChangePassword(w http.ResponseWriter, r *http.Request) {

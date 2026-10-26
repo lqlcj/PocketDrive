@@ -156,7 +156,7 @@ func New(cfg *config.Config, d Deps) *http.Server {
 		ReadTimeout:       15 * time.Minute,
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
-		Handler:           securityHeaders(observe(auth.CSRF(mux))),
+		Handler:           httpx.WithSecureCookies(cfg.SecureCookies, securityHeaders(observe(auth.CSRF(mux)))),
 	}
 }
 

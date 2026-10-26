@@ -339,7 +339,7 @@ func (s *Service) HandleUnlock(w http.ResponseWriter, r *http.Request) {
 	s.addGrant(grantToken, sh.Token, time.Now())
 	http.SetCookie(w, &http.Cookie{Name: grantCookie(sh.Token), Value: grantToken,
 		Path: "/api/v1/public/share/" + sh.Token, HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: 15 * 60})
+		Secure: httpx.CookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 15 * 60})
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

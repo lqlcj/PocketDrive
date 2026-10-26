@@ -1,11 +1,31 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 )
+
+type secureCookiesKey struct{}
+
+// WithSecureCookies supports HTTPS termination at a reverse proxy without
+// trusting client-controlled Forwarded or X-Forwarded-Proto headers.
+func WithSecureCookies(force bool, next http.Handler) http.Handler {
+	if !force {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), secureCookiesKey{}, true)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func CookieSecure(r *http.Request) bool {
+	forced, _ := r.Context().Value(secureCookiesKey{}).(bool)
+	return r.TLS != nil || forced
+}
 
 func JSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

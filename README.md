@@ -78,6 +78,7 @@ services:
             - POCKETDRIVE_DB=/config/pocketdrive.db
             - POCKETDRIVE_ADMIN_USER=改成你的用户名
             - POCKETDRIVE_ADMIN_PASSWORD=改成你的登录密码
+            - POCKETDRIVE_SECURE_COOKIES=${POCKETDRIVE_SECURE_COOKIES:-false}
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
             - POCKETDRIVE_ARIA2_SECRET=请填一段随机的 RPC 密钥
             - POCKETDRIVE_ARIA2_DATA_DIR=/data
@@ -209,13 +210,23 @@ docker rmi ghcr.io/lqlcj/pocketdrive:latest ghcr.io/lqlcj/pocketdrive-aria2:late
 | `POCKETDRIVE_DB` | `./pocketdrive.db` | SQLite 路径(放数据目录外,避免出现在网盘里) |
 | `POCKETDRIVE_ADMIN_USER` | `admin` | 管理员用户名 |
 | `POCKETDRIVE_ADMIN_PASSWORD` | 随机生成 | 初始密码,之后在设置页修改(存库) |
+| `POCKETDRIVE_SECURE_COOKIES` | `false` | HTTPS 反向代理部署设为 `true`，强制登录及分享 Cookie 仅通过 HTTPS 发送；直接 TLS 自动启用，不信任客户端转发头 |
 | `POCKETDRIVE_ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | aria2 的 JSON-RPC 地址。官方 compose 里填 `http://aria2:6800/jsonrpc` 指向 aria2 容器 |
 | `POCKETDRIVE_ARIA2_SECRET` | 必填 | aria2 RPC 密钥,必须和 aria2 容器的 `RPC_SECRET` 填成同一个随机值,不要使用公开示例密钥 |
 | `POCKETDRIVE_ARIA2_DATA_DIR` | 同 DATA_DIR | aria2 进程视角的数据目录路径。两个容器要把网盘目录挂成同一个路径,否则下载完的文件在网盘里找不到 |
 
+### HTTPS 与安全更新
+
+使用 HTTPS 反向代理时，在 Compose 的 `.env` 中添加
+`POCKETDRIVE_SECURE_COOKIES=true` 并重建容器，让登录和分享 Cookie 仅通过 HTTPS 发送。
+本机纯 HTTP 开发保持默认值；应用不会根据客户端提交的转发头开启或关闭此策略。
+
+主镜像和 aria2 镜像每周重新拉取基础镜像并无缓存重建。主镜像发布前运行前端漏洞审计、
+Go 测试、认证/分享/缩略图竞态检查及 govulncheck；Dependabot 每周提交依赖更新 PR，需审查合并。
+
 ## 本机开发(Windows)
 
-本机开发需要 Go 1.26.8+、Node.js 24 和 ffmpeg（安装后需重启终端）：
+本机开发需要 Go 1.26.10+、Node.js 24 和 ffmpeg 6.1+（安装后需重启终端）：
 
 ```powershell
 winget install Gyan.FFmpeg.Shared

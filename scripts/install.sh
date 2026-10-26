@@ -69,6 +69,7 @@ services:
             - POCKETDRIVE_DATA_DIR=/data
             - POCKETDRIVE_DB=/config/pocketdrive.db
             - POCKETDRIVE_ADMIN_USER=admin
+            - POCKETDRIVE_SECURE_COOKIES=\${POCKETDRIVE_SECURE_COOKIES:-false}
             - POCKETDRIVE_ADMIN_PASSWORD=\${POCKETDRIVE_ADMIN_PASSWORD}
             - POCKETDRIVE_ARIA2_RPC=http://aria2:6800/jsonrpc
             - POCKETDRIVE_ARIA2_SECRET=\${ARIA2_SECRET}

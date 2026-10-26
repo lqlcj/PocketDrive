@@ -13,6 +13,11 @@ on:
     workflow_dispatch:
     pull_request:
         paths:
+            - 'go.mod'
+            - 'go.sum'
+            - 'cmd/**'
+            - 'internal/**'
+            - 'web/**'
             - 'docker/**'
             - 'scripts/aria2-smoke.mjs'
             - 'scripts/aria2-smoke.test.mjs'
@@ -22,6 +27,35 @@ on:
         - cron: '23 4 * * 1'
 
 jobs:
+    security:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '24'
+                  cache: npm
+                  cache-dependency-path: web/package-lock.json
+            - name: Audit and build frontend
+              run: |
+                  npm --prefix web ci --ignore-scripts
+                  npm --prefix web audit --audit-level=high
+                  npm --prefix web run build
+            - uses: actions/setup-go@v5
+              with:
+                  go-version-file: go.mod
+                  cache: true
+            - name: Test and audit backend
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --no-install-recommends -y ffmpeg
+                  go test ./...
+                  go test -race ./internal/auth ./internal/share ./internal/thumbs
+                  go build ./cmd/pocketdrive
+                  go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
     aria2:
         runs-on: ubuntu-latest
         permissions:
@@ -70,8 +104,8 @@ jobs:
                   tags: ${{ steps.meta.outputs.tags }}
                   labels: ${{ steps.meta.outputs.labels }}
     build:
-        needs: aria2
-        if: github.event_name != 'pull_request' && github.event_name != 'schedule'
+        needs: [aria2, security]
+        if: github.event_name != 'pull_request'
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -96,6 +130,7 @@ jobs:
                       type=raw,value=latest,enable={{is_default_branch}}
                       type=semver,pattern={{version}}
                       type=sha,format=short,prefix=sha-
+                      type=schedule,pattern={{date 'YYYYMMDD'}}
 
             - name: Publish PocketDrive image
               uses: docker/build-push-action@v6
@@ -105,6 +140,7 @@ jobs:
                   platforms: linux/amd64,linux/arm64
                   push: true
                   pull: true
+                  no-cache: ${{ github.event_name == 'schedule' }}
                   tags: ${{ steps.meta-app.outputs.tags }}
                   labels: ${{ steps.meta-app.outputs.labels }}
                   cache-from: type=gha,scope=pocketdrive

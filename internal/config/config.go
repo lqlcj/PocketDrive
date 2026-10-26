@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strconv"
 )
 
 const Version = "0.5.0"
@@ -20,6 +22,9 @@ type Config struct {
 	// run; afterwards credentials live in the database.
 	AdminUser     string
 	AdminPassword string
+	// SecureCookies forces Secure on cookies behind an HTTPS reverse proxy.
+	// Direct TLS requests always use Secure, regardless of this setting.
+	SecureCookies bool
 
 	// Aria2RPC 指向 aria2 的 JSON-RPC 接口。aria2 始终跑在独立容器里
 	// (docker compose 的 aria2 服务),PocketDrive 只做客户端。
@@ -31,6 +36,10 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
+	secureCookies, err := strconv.ParseBool(envOr("POCKETDRIVE_SECURE_COOKIES", "false"))
+	if err != nil {
+		return nil, fmt.Errorf("POCKETDRIVE_SECURE_COOKIES must be true or false: %w", err)
+	}
 	cfg := &Config{
 		// 默认 16688:避开 8080 等常见端口的冲突
 		Addr:          envOr("POCKETDRIVE_ADDR", ":16688"),
@@ -38,6 +47,7 @@ func Load() (*Config, error) {
 		DBPath:        envOr("POCKETDRIVE_DB", "./pocketdrive.db"),
 		AdminUser:     envOr("POCKETDRIVE_ADMIN_USER", "admin"),
 		AdminPassword: os.Getenv("POCKETDRIVE_ADMIN_PASSWORD"),
+		SecureCookies: secureCookies,
 		// 官方 compose 里指向 aria2 容器;本机开发默认连本地 aria2c
 		Aria2RPC:    envOr("POCKETDRIVE_ARIA2_RPC", "http://127.0.0.1:6800/jsonrpc"),
 		Aria2Secret: os.Getenv("POCKETDRIVE_ARIA2_SECRET"),
